@@ -315,13 +315,16 @@ function startProjector() {
   const msg = document.getElementById('projMsg');
   let state = null, lastMsg = 0;
 
-  if (!window.opener) msg.textContent = 'Open this from the control page';
-
-  window.addEventListener('message', e => {
-    if (e.source !== window.opener || !e.data || e.data.type !== 'state') return;
-    state = e.data.s;
+  // Two ways to talk to the control page: a same-site channel (works even if
+  // either page was refreshed or opened by hand) and the opener window link.
+  const bc = 'BroadcastChannel' in window ? new BroadcastChannel('floorgrid') : null;
+  const onState = d => {
+    if (!d || d.type !== 'state') return;
+    state = d.s;
     lastMsg = performance.now();
-  });
+  };
+  bc && (bc.onmessage = e => onState(e.data));
+  window.addEventListener('message', e => { if (e.source === window.opener) onState(e.data); });
 
   document.getElementById('fsBtn').onclick = () => document.documentElement.requestFullscreen?.();
   document.addEventListener('keydown', e => { if (e.key === 'f' || e.key === 'F') document.documentElement.requestFullscreen?.(); });
@@ -335,7 +338,10 @@ function startProjector() {
   });
 
   // Mouse/touch on the projector also acts as a "foot" (handy for testing)
-  const send = d => window.opener?.postMessage(d, '*');
+  const send = d => {
+    try { bc?.postMessage(d); } catch {}
+    try { window.opener?.postMessage(d, '*'); } catch {}
+  };
   cv.addEventListener('pointerdown', e => {
     if (!state) return;
     cv.setPointerCapture(e.pointerId);
@@ -355,8 +361,9 @@ function startProjector() {
     const { ctx, W, H } = fitCanvas(cv);
     render(ctx, W, H, state, performance.now());
     send({ type: 'tick' });
-    if (window.opener && performance.now() - lastMsg > 1500) msg.textContent = 'Waiting for control page…';
-    else if (window.opener) msg.textContent = 'Connected';
+    msg.textContent = performance.now() - lastMsg < 1500
+      ? 'Connected'
+      : 'Waiting for control page… (keep it open in this browser)';
     requestAnimationFrame(frame);
   })();
 }
@@ -472,9 +479,10 @@ function startControl() {
   let calibrating = false, newPts = [];
   const CORNER_NAMES = ['top-left', 'top-right', 'bottom-right', 'bottom-left'];
   function updateCalibHelp() {
-    $('calibHelp').textContent = calibrating
-      ? `Click corner ${newPts.length + 1} (${CORNER_NAMES[newPts.length]}) of the grid in the camera image. Esc to cancel.`
-      : '';
+    if (calibrating) {
+      $('calibHelp').textContent = `Click corner ${newPts.length + 1} (${CORNER_NAMES[newPts.length]}) of the grid in the camera image. Esc to cancel.`;
+      $('calibHelp').style.color = 'var(--warn)';
+    }
     $('camCanvas').classList.toggle('calibrating', calibrating);
   }
   $('calib').onclick = () => {
@@ -606,12 +614,16 @@ function startControl() {
   $('openProj').onclick = () => {
     projWin = window.open(location.href.split(/[?#]/)[0] + '?view=projector', 'floorgrid_projector', 'popup,width=1024,height=600');
   };
-  window.addEventListener('message', e => {
-    if (!projWin || e.source !== projWin || !e.data) return;
-    if (e.data.type === 'press') simPress(e.data.id, e.data.idx);
-    if (e.data.type === 'release') simRelease(e.data.id);
-    if (e.data.type === 'tick' && document.hidden) step();
-  });
+  const bc = 'BroadcastChannel' in window ? new BroadcastChannel('floorgrid') : null;
+  let lastTick = 0;
+  function fromProjector(d) {
+    if (!d) return;
+    if (d.type === 'press') simPress(d.id, d.idx);
+    if (d.type === 'release') simRelease(d.id);
+    if (d.type === 'tick') { lastTick = performance.now(); if (document.hidden) step(); }
+  }
+  bc && (bc.onmessage = e => fromProjector(e.data));
+  window.addEventListener('message', e => { if (projWin && e.source === projWin) fromProjector(e.data); });
 
   const pv = $('preview');
   const pvTile = e => { const r = pv.getBoundingClientRect(); return tileAt(e.clientX - r.left, e.clientY - r.top, r.width, r.height, cfg); };
@@ -764,6 +776,20 @@ function startControl() {
       cctx.beginPath(); cctx.arc(x * W, y * Hh, 7 * k, 0, Math.PI * 2); cctx.fill();
       cctx.font = `700 ${18 * k}px system-ui`; cctx.fillText(String(i + 1), x * W + 10 * k, y * Hh - 10 * k);
     });
+    // Body outline for each detected person
+    const BONES = [[11, 12], [11, 13], [13, 15], [12, 14], [14, 16], [11, 23], [12, 24], [23, 24],
+                   [23, 25], [25, 27], [24, 26], [26, 28]];
+    cctx.strokeStyle = 'rgba(240,171,252,.85)';
+    cctx.lineWidth = 3 * k;
+    for (const lm of poses) {
+      cctx.beginPath();
+      for (const [a, b] of BONES) {
+        if (!lm[a] || !lm[b]) continue;
+        cctx.moveTo(lm[a].x * W, lm[a].y * Hh);
+        cctx.lineTo(lm[b].x * W, lm[b].y * Hh);
+      }
+      cctx.stroke();
+    }
     for (const f of feet) {
       cctx.fillStyle = f.on ? '#22c55e' : '#94a3b8';
       cctx.strokeStyle = '#000'; cctx.lineWidth = 2 * k;
@@ -832,12 +858,26 @@ function startControl() {
 
     const { ctx, W, H: Hp } = fitCanvas(pv);
     render(ctx, W, Hp, snap, now);
-    if (projWin && !projWin.closed) projWin.postMessage({ type: 'state', s: snap }, '*');
+    try { bc?.postMessage({ type: 'state', s: snap }); } catch {}
+    if (!bc && projWin && !projWin.closed) projWin.postMessage({ type: 'state', s: snap }, '*');
     drawCamera(camFeet);
 
-    $('stats').textContent = camOn
-      ? `AI ${fps.toFixed(0)} fps · ${poses.length} ${poses.length === 1 ? 'person' : 'people'} · ${gridFeet.length} ${cfg.track === 'hands' ? 'hands' : cfg.track === 'feet' ? 'feet' : 'points'} on grid`
-      : '';
+    const what = cfg.track === 'hands' ? 'hands' : cfg.track === 'feet' ? 'feet' : 'hands/feet';
+    const projOk = now - lastTick < 1500;
+    $('stats').textContent = (camOn
+      ? `AI ${fps.toFixed(0)} fps · ${poses.length} ${poses.length === 1 ? 'person' : 'people'} · ${gridFeet.length} ${what} on grid · `
+      : '') + `Projector: ${projOk ? 'connected' : 'not connected'}`;
+
+    // Plain-language diagnosis of what's missing
+    let d, ok = false;
+    if (!camOn) d = 'Camera is off. Start it in step 2.';
+    else if (!landmarker) d = modelLoading ? 'Loading the AI model…' : 'AI model not loaded. Check the internet connection, then press Restart in step 2.';
+    else if (!H) d = 'Not calibrated, so tiles can\'t react yet. Press Calibrate in step 3.';
+    else if (!poses.length) d = 'No person seen. The camera must see the player\'s whole body (head to feet).';
+    else if (!camFeet.length) d = `Person seen, but their ${what} aren't clear. Add light, or lower Detection confidence in Settings.`;
+    else if (!gridFeet.length) d = `${what[0].toUpperCase() + what.slice(1)} are outside the grid. If the blue lines don't match the projection, recalibrate.`;
+    else { d = `Tracking OK: ${gridFeet.length} ${what} on the grid.`; ok = true; }
+    if (!calibrating) { $('calibHelp').textContent = d; $('calibHelp').style.color = ok ? 'var(--good)' : 'var(--warn)'; }
   }
 
   if (!navigator.mediaDevices?.getUserMedia) setStatus('This browser cannot use a camera here. Open the file in Chrome or Edge.', 'bad');
