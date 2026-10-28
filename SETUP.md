@@ -38,15 +38,17 @@ Players throw soft balls at the wall instead of touching it.
      players' heads), or have players throw from the side.
 6. Games that work with balls: **Test tiles**, **Hit the lights**, **Tic-tac-toe (2 teams)**, **Meteor Storm**.
 
-### Meteor Storm
+### Asteroid Attack
 
-Meteors fall toward the city at the bottom. Hit them before they land, or the shield (top right) loses a bar.
-- Big meteors split into two small ones. Golden comets give 100 points and repair one shield bar.
-- Hitting meteors quickly in a row builds a combo (up to x4).
-- Every 25 seconds a new wave starts and meteors get faster.
+Asteroids fly toward you out of deep space: they start as tiny dots and grow bigger as they get closer.
+- Hit one before it arrives and it explodes. Hitting it while it's still small and far away is worth more points.
+- If you miss it, it crashes into the screen (big explosion, cracked glass) and the shield loses a bar.
+  A red ring around an asteroid means it's about to crash.
+- Gray armored asteroids (from wave 3) need 2 hits. Golden comets give 100 points and repair the shield.
+- Hitting asteroids quickly in a row builds a combo (up to x4). A new, faster wave starts every 25 seconds.
 - The best score is saved on the laptop.
-- The app knows where the picture is moving and ignores motion there, so moving meteors don't
-  count as hits. You can also click the preview or the projected screen to play with a mouse.
+- The app knows where the picture is moving and ignores motion there, so asteroids don't count as hits.
+  You can also click the preview or the projected screen to play with a mouse.
 
 Notes:
 - In ball mode, empty tiles are light gray-blue, not black, so the wall is lit and the ball shows up.
