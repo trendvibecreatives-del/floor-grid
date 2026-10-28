@@ -36,7 +36,17 @@ Players throw soft balls at the wall instead of touching it.
    - Hits counted on the wrong tile → move the camera closer to the projector and recalibrate.
    - "Hidden behind a player" → mount the camera higher (above the projector, looking over
      players' heads), or have players throw from the side.
-6. Games that work with balls: **Test tiles**, **Hit the lights**, **Tic-tac-toe (2 teams)**.
+6. Games that work with balls: **Test tiles**, **Hit the lights**, **Tic-tac-toe (2 teams)**, **Meteor Storm**.
+
+### Meteor Storm
+
+Meteors fall toward the city at the bottom. Hit them before they land, or the shield (top right) loses a bar.
+- Big meteors split into two small ones. Golden comets give 100 points and repair one shield bar.
+- Hitting meteors quickly in a row builds a combo (up to x4).
+- Every 25 seconds a new wave starts and meteors get faster.
+- The best score is saved on the laptop.
+- The app knows where the picture is moving and ignores motion there, so moving meteors don't
+  count as hits. You can also click the preview or the projected screen to play with a mouse.
 
 Notes:
 - In ball mode, empty tiles are light gray-blue, not black, so the wall is lit and the ball shows up.

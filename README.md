@@ -18,5 +18,7 @@ if available, or opens `floor-grid.html` directly.
 - **Hit the lights** – hit the pulsing green tile as fast as you can.
 - **Lava floor** – stay off tiles that turn red. 3 lives.
 - **Tic-tac-toe (2 teams)** – Red and Blue take turns claiming tiles. Three in a row wins.
+- **Meteor Storm** – meteors fall toward a city. Hit them with balls before they land. Big rocks
+  split in two, golden comets repair the shield, combos multiply points, waves get faster.
 
 Input can be hands (wall), feet (floor), or **thrown balls** (wall, strike-style).

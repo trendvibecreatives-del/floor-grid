@@ -131,6 +131,7 @@
             <option value="hits">Hit the lights</option>
             <option value="lava">Lava floor</option>
             <option value="ttt">Tic-tac-toe (2 teams)</option>
+            <option value="meteor">Meteor Storm ☄</option>
           </select>
           <button id="start">Start</button>
           <button id="stop" class="ghost">Stop</button>
@@ -190,6 +191,13 @@ function layout(W, H, s) {
   return { gx: m, gy: band + m, gw: W - 2 * m, gh: H - band - 2 * m, band };
 }
 
+// Position inside the grid (0..1 each way), or null when outside
+function uvAt(x, y, W, H, s) {
+  const L = layout(W, H, s);
+  const u = (x - L.gx) / L.gw, v = (y - L.gy) / L.gh;
+  return u < 0 || u >= 1 || v < 0 || v >= 1 ? null : { u, v };
+}
+
 function tileAt(x, y, W, H, s) {
   const L = layout(W, H, s);
   const u = (x - L.gx) / L.gw, v = (y - L.gy) / L.gh;
@@ -222,17 +230,132 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
+// Repeatable random numbers, so stars and rock shapes look the same every frame
+function seeded(seed) {
+  let x = Math.floor(seed * 2147483646) + 1;
+  return () => (x = (x * 16807) % 2147483647) / 2147483647;
+}
+
+// Meteor Storm: space sky, city base with a shield, rocks, explosions.
+// Everything is drawn from the game data only (no clock), so the control
+// page's copy of the picture matches the projector's exactly.
+function drawMeteorScene(ctx, L, sc) {
+  const { gx, gy, gw, gh } = L;
+  ctx.save();
+  ctx.beginPath(); ctx.rect(gx, gy, gw, gh); ctx.clip();
+
+  // Sky: mid-blue, bright enough that a thrown ball stands out against it
+  const sky = ctx.createLinearGradient(0, gy, 0, gy + gh);
+  sky.addColorStop(0, '#1d2756'); sky.addColorStop(1, '#40559a');
+  ctx.fillStyle = sky; ctx.fillRect(gx, gy, gw, gh);
+  const sr = seeded(0.37);
+  ctx.fillStyle = 'rgba(255,255,255,.75)';
+  for (let i = 0; i < 90; i++) {
+    const sz = 1 + sr() * Math.max(1, gh * 0.004);
+    ctx.fillRect(gx + sr() * gw, gy + sr() * gh * sc.base, sz, sz);
+  }
+
+  // City base and shield
+  const by = gy + sc.base * gh;
+  ctx.fillStyle = '#121833'; ctx.fillRect(gx, by, gw, gy + gh - by);
+  const br = seeded(0.81);
+  for (let x = gx; x < gx + gw;) {
+    const w = gw * (0.025 + br() * 0.04), h = (gy + gh - by) * (0.35 + br() * 0.6);
+    ctx.fillStyle = '#1c2547'; ctx.fillRect(x, gy + gh - h, w - 2, h);
+    ctx.fillStyle = '#fcd34d';
+    for (let wy = gy + gh - h + 4; wy < gy + gh - 4; wy += 7) for (let wx = x + 3; wx < x + w - 5; wx += 6) if (br() > 0.55) ctx.fillRect(wx, wy, 2, 2);
+    x += w;
+  }
+  const shieldA = 0.3 + 0.7 * Math.max(0, sc.shield) / sc.maxShield;
+  ctx.strokeStyle = sc.baseHit ? '#ef4444' : `rgba(56,225,255,${shieldA})`;
+  ctx.lineWidth = Math.max(3, gh * (0.004 + 0.003 * Math.max(0, sc.shield)));
+  ctx.beginPath(); ctx.moveTo(gx, by); ctx.lineTo(gx + gw, by); ctx.stroke();
+
+  // Meteors
+  for (const m of sc.meteors) {
+    const x = gx + m.u * gw, y = gy + m.v * gh, R = m.r * gh;
+    const sp = Math.hypot(m.vu, m.vv) || 1, dx = -m.vu / sp, dy = -m.vv / sp;
+    const tail = R * (m.kind === 'comet' ? 6 : 2.6);
+    const tg = ctx.createLinearGradient(x, y, x + dx * tail, y + dy * tail);
+    tg.addColorStop(0, m.kind === 'comet' ? 'rgba(255,236,150,.9)' : 'rgba(251,146,60,.75)');
+    tg.addColorStop(1, 'rgba(251,146,60,0)');
+    ctx.strokeStyle = tg; ctx.lineCap = 'round'; ctx.lineWidth = R * (m.kind === 'comet' ? 1.1 : 1.5);
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + dx * tail, y + dy * tail); ctx.stroke();
+
+    if (m.kind === 'comet') {
+      const cg = ctx.createRadialGradient(x, y, 0, x, y, R * 1.3);
+      cg.addColorStop(0, '#fffbe6'); cg.addColorStop(0.5, '#fcd34d'); cg.addColorStop(1, 'rgba(252,211,77,0)');
+      ctx.fillStyle = cg; ctx.beginPath(); ctx.arc(x, y, R * 1.3, 0, Math.PI * 2); ctx.fill();
+      continue;
+    }
+    const rr = seeded(m.seed);
+    ctx.beginPath();
+    for (let k = 0; k < 10; k++) {
+      const a = (k / 10) * Math.PI * 2, rad = R * (0.8 + rr() * 0.3);
+      k ? ctx.lineTo(x + Math.cos(a) * rad, y + Math.sin(a) * rad) : ctx.moveTo(x + Math.cos(a) * rad, y + Math.sin(a) * rad);
+    }
+    ctx.closePath();
+    ctx.fillStyle = m.kind === 'small' ? '#9a7a60' : '#8a6b54'; ctx.fill();
+    ctx.lineWidth = Math.max(2, R * 0.12); ctx.strokeStyle = '#4a3627'; ctx.stroke();
+    ctx.fillStyle = '#7f624d';
+    for (let k = 0; k < 3; k++) { ctx.beginPath(); ctx.arc(x + (rr() - 0.5) * R, y + (rr() - 0.5) * R, R * (0.12 + rr() * 0.12), 0, Math.PI * 2); ctx.fill(); }
+  }
+
+  // Effects
+  for (const f of sc.fx) {
+    const x = gx + f.u * gw, y = gy + f.v * gh;
+    if (f.k === 'boom' && f.age < 650) {
+      const p = f.age / 650, R = f.r * gh;
+      ctx.fillStyle = f.gold ? `rgba(255,240,170,${(1 - p) * 0.8})` : `rgba(255,214,140,${(1 - p) * 0.7})`;
+      ctx.beginPath(); ctx.arc(x, y, R * (0.8 + 1.8 * p), 0, Math.PI * 2); ctx.fill();
+      const fr = seeded(f.seed || 0.5);
+      for (let k = 0; k < 12; k++) {
+        const a = fr() * Math.PI * 2, d = R * (0.4 + (2 + fr() * 2) * p), s2 = R * 0.3 * (1 - p);
+        ctx.fillStyle = k % 2 ? '#f97316' : '#fbbf24';
+        ctx.fillRect(x + Math.cos(a) * d - s2 / 2, y + Math.sin(a) * d - s2 / 2, s2, s2);
+      }
+    } else if (f.k === 'text' && f.age < 900) {
+      const p = f.age / 900;
+      ctx.globalAlpha = 1 - p;
+      ctx.font = `800 ${gh * 0.065}px system-ui, sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.lineWidth = gh * 0.01; ctx.strokeStyle = '#1a1206';
+      ctx.strokeText(f.text, x, y - p * gh * 0.1);
+      ctx.fillStyle = '#fde68a'; ctx.fillText(f.text, x, y - p * gh * 0.1);
+      ctx.globalAlpha = 1;
+    } else if (f.k === 'miss' && f.age < 450) {
+      const p = f.age / 450;
+      ctx.strokeStyle = `rgba(255,255,255,${1 - p})`; ctx.lineWidth = Math.max(2, gh * 0.006);
+      ctx.beginPath(); ctx.arc(x, y, gh * 0.03 * (1 + p), 0, Math.PI * 2); ctx.stroke();
+    } else if (f.k === 'impact' && f.age < 800) {
+      const p = f.age / 800;
+      ctx.fillStyle = `rgba(249,115,22,${(1 - p) * 0.85})`;
+      ctx.beginPath(); ctx.arc(x, by, f.r * gh * (1.5 + 2 * p), Math.PI, 0); ctx.fill();
+    }
+  }
+
+  if (sc.banner) {
+    ctx.font = `900 ${gh * 0.16}px system-ui, sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.lineWidth = gh * 0.015; ctx.strokeStyle = '#0b1030';
+    ctx.strokeText(sc.banner, gx + gw / 2, gy + gh * 0.42);
+    ctx.fillStyle = '#7dd3fc'; ctx.fillText(sc.banner, gx + gw / 2, gy + gh * 0.42);
+  }
+  ctx.restore();
+}
+
 function render(ctx, W, H, s, now) {
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, W, H);
   if (!s) return;
   const L = layout(W, H, s);
-  if (s.still) { ctx.fillStyle = '#3a4357'; ctx.fillRect(L.gx, L.gy, L.gw, L.gh); }   // light the gaps too
   const tw = L.gw / s.cols, th = L.gh / s.rows;
   const t = Math.min(tw, th);
   const pad = Math.max(2, t * 0.05), rad = t * 0.08;
+  if (s.scene && s.scene.kind === 'meteor') drawMeteorScene(ctx, L, s.scene);
+  else if (s.still) { ctx.fillStyle = '#3a4357'; ctx.fillRect(L.gx, L.gy, L.gw, L.gh); }   // light the gaps too
 
-  for (let r = 0; r < s.rows; r++) {
+  for (let r = 0; r < (s.scene ? 0 : s.rows); r++) {
     for (let c = 0; c < s.cols; c++) {
       const i = r * s.cols + c, k = s.tiles[i] || '';
       const x = L.gx + c * tw + pad, y = L.gy + r * th + pad, w = tw - 2 * pad, h = th - 2 * pad;
@@ -362,9 +485,11 @@ function startProjector() {
   };
   cv.addEventListener('pointerdown', e => {
     if (!state) return;
-    cv.setPointerCapture(e.pointerId);
+    try { cv.setPointerCapture(e.pointerId); } catch {}
     const r = cv.getBoundingClientRect();
     send({ type: 'press', id: 'p' + e.pointerId, idx: tileAt(e.clientX - r.left, e.clientY - r.top, r.width, r.height, state) });
+    const p = uvAt(e.clientX - r.left, e.clientY - r.top, r.width, r.height, state);
+    if (p) send({ type: 'shot', sid: Math.random(), u: p.u, v: p.v });   // a click = a throw
   });
   cv.addEventListener('pointermove', e => {
     if (!state || !cv.hasPointerCapture(e.pointerId)) return;
@@ -516,10 +641,20 @@ function startControl() {
     win()    { [523, 659, 784, 1046].forEach((f, i) => tone(f, i * 0.12, 0.35, 'triangle', 0.28)); [1046, 1318, 1568].forEach(f => tone(f, 0.5, 0.8, 'sine', 0.14)); noise(0.48, 0.6, 0.1, 6000, 0.5, 'highpass'); },
     lose()   { [392, 330, 262, 196].forEach((f, i) => tone(f, i * 0.18, 0.3, 'sawtooth', 0.12, f * 0.97)); },
     draw()   { tone(440, 0, 0.25, 'triangle', 0.2); tone(440, 0.3, 0.35, 'triangle', 0.2); },
+    // Meteor exploding: deep boom + crackle; combos add a rising chime
+    boom(kind = 'big', combo = 1) {
+      const big = kind === 'big';
+      noise(0, big ? 0.6 : 0.4, 0.7, big ? 900 : 1400, 0.7, 'lowpass', 120);
+      tone(big ? 120 : 170, 0, big ? 0.45 : 0.3, 'sine', 0.6, 40);
+      noise(0.05, 0.25, 0.15, 5000, 1, 'highpass');
+      if (combo > 1) { const f = 523 * Math.pow(2, (combo - 1) * 4 / 12); tone(f, 0.08, 0.25, 'triangle', 0.22); tone(f * 1.5, 0.14, 0.3, 'sine', 0.15); }
+    },
+    bonus()  { this.boom('small'); [784, 988, 1175, 1568].forEach((f, i) => tone(f, 0.1 + i * 0.07, 0.25, 'triangle', 0.22)); },
+    wave()   { tone(220, 0, 0.6, 'sawtooth', 0.12, 440); tone(330, 0.05, 0.6, 'sawtooth', 0.1, 660); noise(0, 0.5, 0.12, 300, 1, 'bandpass', 3000); },
   };
   function play(name, ...args) {
     if (!cfg.sound) return;
-    try { sfx[name](...args); } catch {}
+    try { sfx[name].apply(sfx, args); } catch {}
   }
 
   // ---------- Homography (camera image -> grid square) ----------
@@ -711,6 +846,9 @@ function startControl() {
 
   function simPress(id, idx) { if (idx >= 0) sim.set(id, idx); else sim.delete(id); }
   function simRelease(id) { sim.delete(id); }
+  // Exact hit positions this frame (ball impacts, clicks), for free-moving targets
+  const shots = [];
+  const seenShots = new Set();
 
   let projWin = null;
   $('openProj').onclick = () => {
@@ -722,6 +860,11 @@ function startControl() {
     if (!d) return;
     if (d.type === 'press') simPress(d.id, d.idx);
     if (d.type === 'release') simRelease(d.id);
+    if (d.type === 'shot' && !seenShots.has(d.sid)) {   // may arrive twice (two channels)
+      seenShots.add(d.sid);
+      if (seenShots.size > 50) seenShots.delete(seenShots.values().next().value);
+      shots.push({ u: d.u, v: d.v, src: 'click' });
+    }
     if (d.type === 'tick') { lastTick = performance.now(); if (document.hidden) step(); }
   }
   bc && (bc.onmessage = e => fromProjector(e.data));
@@ -729,7 +872,13 @@ function startControl() {
 
   const pv = $('preview');
   const pvTile = e => { const r = pv.getBoundingClientRect(); return tileAt(e.clientX - r.left, e.clientY - r.top, r.width, r.height, cfg); };
-  pv.addEventListener('pointerdown', e => { pv.setPointerCapture(e.pointerId); simPress('v' + e.pointerId, pvTile(e)); });
+  pv.addEventListener('pointerdown', e => {
+    try { pv.setPointerCapture(e.pointerId); } catch {}
+    simPress('v' + e.pointerId, pvTile(e));
+    const r = pv.getBoundingClientRect();
+    const p = uvAt(e.clientX - r.left, e.clientY - r.top, r.width, r.height, cfg);
+    if (p) shots.push({ ...p, src: 'click' });
+  });
   pv.addEventListener('pointermove', e => { if (pv.hasPointerCapture(e.pointerId)) simPress('v' + e.pointerId, pvTile(e)); });
   pv.addEventListener('pointerup', e => simRelease('v' + e.pointerId));
   pv.addEventListener('pointercancel', e => simRelease('v' + e.pointerId));
@@ -746,6 +895,7 @@ function startControl() {
     hits: 'Hit the pulsing green tile as fast as you can.',
     lava: 'Yellow blinking = about to turn to lava. Stay off it before it turns red. 3 lives. (Not for ball mode.)',
     ttt: 'Red and Blue take turns. Hit an empty tile to claim it. Three in a row wins. Great with balls.',
+    meteor: 'Meteors fall toward the base. Hit them before they land! Big ones split, golden comets repair the shield. Best with balls.',
   };
   const showHint = () => { $('modeHint').textContent = HINTS[$('mode').value]; };
   $('mode').onchange = () => { showHint(); if ($('mode').value === 'test') startGame(); };
@@ -760,6 +910,10 @@ function startControl() {
     if (G.mode === 'ttt') { G.phase = 'play'; G.turn = 'p1'; play('go'); return; }
     G.phase = 'countdown'; G.goAt = now + 3000; G.lastCount = 4;
     G.lastHurry = 0;
+    if (G.mode === 'meteor') {
+      G.met = { meteors: [], fx: [], shield: 5, wave: 1, nextSpawn: 0, combo: 1, comboUntil: 0,
+                lastT: now, bannerUntil: 0, baseHitUntil: 0, nextId: 1 };
+    }
     if (cfg.sound) try { audio(); } catch {}
   }
   function stopGame() {
@@ -777,7 +931,112 @@ function startControl() {
   };
   const fmtTime = ms => { const s = Math.max(0, Math.ceil(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 
-  function tickGame(now, pressed, edges) {
+  // ---------- Meteor Storm ----------
+  // Positions: u = across the grid (0..1), v = down the grid (0..1).
+  // Sizes and speeds are in "grid heights" so meteors stay round.
+  const BASE = 0.9;                       // top of the base / shield line
+  const MAX_SHIELD = 5;
+  const gridAspect = () => { const L = layout(1600, 900, cfg); return L.gw / L.gh; };
+  const rand = (a, b) => a + Math.random() * (b - a);
+
+  function tickMeteor(now, shots, hud) {
+    const M = G.met;
+    const A = gridAspect();
+    const dt = Math.min(0.05, (now - M.lastT) / 1000);
+    M.lastT = now;
+    M.fx = M.fx.filter(f => now - f.t0 < 1000);
+
+    if (G.phase === 'play') {
+      const elapsed = (now - G.start) / 1000;
+      const wave = 1 + Math.floor(elapsed / 25);
+      if (wave !== M.wave) { M.wave = wave; M.bannerUntil = now + 1500; play('wave'); }
+      const speed = 0.07 * Math.pow(1.15, M.wave - 1);
+
+      // New meteors
+      if (now >= M.nextSpawn && M.meteors.length < 3 + M.wave) {
+        const comet = M.wave >= 2 && Math.random() < 0.12;
+        M.meteors.push(comet
+          ? { id: M.nextId++, kind: 'comet', u: rand(0.15, 0.85), v: -0.05, vu: rand(-0.15, 0.15), vv: speed * 3, r: 0.04, seed: Math.random() }
+          : { id: M.nextId++, kind: 'big', u: rand(0.08, 0.92), v: -0.1, vu: rand(-0.04, 0.04), vv: speed * rand(0.8, 1.25), r: 0.085, seed: Math.random() });
+        M.nextSpawn = now + Math.max(800, 2600 - (M.wave - 1) * 300) * rand(0.7, 1.3);
+      }
+
+      // Move; bounce off the sides; check for landing on the base
+      for (const m of M.meteors) {
+        m.u += m.vu * dt / A;
+        m.v += m.vv * dt;
+        if ((m.u * A < m.r && m.vu < 0) || (m.u * A > A - m.r && m.vu > 0)) m.vu = -m.vu;
+      }
+      const landed = M.meteors.filter(m => m.v + m.r * 0.6 >= BASE);
+      M.meteors = M.meteors.filter(m => m.v + m.r * 0.6 < BASE);
+      for (const m of landed) {
+        if (m.kind === 'comet') continue;            // comets just fly past
+        M.shield--;
+        M.baseHitUntil = now + 500;
+        M.fx.push({ k: 'impact', u: m.u, v: BASE, r: m.r, t0: now });
+        play('damage');
+      }
+
+      // Shots
+      for (const s of shots) {
+        const tol = s.src === 'touch' ? 0.02 : s.src === 'ball' ? 0.09 : 0.06;   // balls get a bigger hit area
+        let best = null, bestD = Infinity;
+        for (const m of M.meteors) {
+          const d = Math.hypot((s.u - m.u) * A, s.v - m.v);
+          if (d <= m.r + tol && d < bestD) { best = m; bestD = d; }
+        }
+        if (!best) {
+          if (s.src !== 'touch') { M.fx.push({ k: 'miss', u: s.u, v: s.v, t0: now }); play('miss'); }
+          continue;
+        }
+        M.combo = now < M.comboUntil ? Math.min(4, M.combo + 1) : 1;
+        M.comboUntil = now + 2500;
+        const pts = (best.kind === 'comet' ? 100 : best.kind === 'big' ? 20 : 30) * M.combo;
+        G.score += pts;
+        M.meteors = M.meteors.filter(m => m !== best);
+        M.fx.push({ k: 'boom', u: best.u, v: best.v, r: best.r, t0: now, seed: best.seed, gold: best.kind === 'comet' });
+        M.fx.push({ k: 'text', u: best.u, v: best.v, t0: now, text: M.combo > 1 ? `+${pts}  x${M.combo}` : `+${pts}` });
+        if (best.kind === 'big') {                    // split into two small rocks
+          for (const dir of [-1, 1]) {
+            M.meteors.push({ id: M.nextId++, kind: 'small', u: best.u + dir * 0.03, v: best.v, vu: dir * rand(0.05, 0.1),
+                             vv: best.vv * 1.1, r: 0.06, seed: Math.random() });
+          }
+        }
+        if (best.kind === 'comet') { M.shield = Math.min(MAX_SHIELD, M.shield + 1); play('bonus'); }
+        else play('boom', best.kind, M.combo);
+      }
+
+      if (M.shield <= 0) {
+        G.phase = 'over';
+        const bestScore = Math.max(G.score, store.get('meteorBest', 0));
+        store.set('meteorBest', bestScore);
+        G.overMsg = `Game over\nScore ${G.score} · Wave ${M.wave} · Best ${bestScore} · press Start`;
+        M.meteors = [];
+        play('lose');
+      }
+    }
+    if (G.phase === 'over') G.msg = G.overMsg;
+
+    hud.left = `Meteor Storm · Score ${G.score}` + (M.combo > 1 && now < M.comboUntil ? `  x${M.combo} combo!` : '');
+    const sh = Math.max(0, Math.min(MAX_SHIELD, M.shield));
+    hud.right = `Wave ${M.wave}  ` + '■'.repeat(sh) + '□'.repeat(MAX_SHIELD - sh);
+    return hud;
+  }
+
+  // What the projector draws for Meteor Storm (plain data, sent each frame)
+  function meteorScene(now) {
+    const M = G.met;
+    if (!M) return null;
+    return {
+      kind: 'meteor', base: BASE, shield: M.shield, maxShield: MAX_SHIELD,
+      baseHit: now < M.baseHitUntil,
+      banner: now < M.bannerUntil ? `WAVE ${M.wave}` : '',
+      meteors: M.meteors.map(m => ({ u: m.u, v: m.v, r: m.r, kind: m.kind, seed: m.seed, vu: m.vu, vv: m.vv })),
+      fx: M.fx.map(f => ({ ...f, age: now - f.t0 })),
+    };
+  }
+
+  function tickGame(now, pressed, edges, shots = []) {
     if (G.tiles.length !== n()) clearTiles();
     G.msg = '';
     const hud = { left: '', right: '' };
@@ -823,6 +1082,8 @@ function startControl() {
         play('go');
       } else G.msg = String(left);
     }
+
+    if (G.mode === 'meteor' && G.met) return tickMeteor(now, shots, hud);
 
     if (G.phase === 'play' && G.mode === 'hits') {
       for (const i of edges) {
@@ -997,11 +1258,52 @@ function startControl() {
     return mask;
   }
 
+  // ---------- Projection model ----------
+  // A tiny copy of what the projector is showing. Where it just changed
+  // (a meteor moved, a target appeared), the camera will see motion too,
+  // so the ball detector ignores those spots for a moment.
+  const MW = 128, MH = 72, PROJ_LAG = 380;
+  const modelCv = document.createElement('canvas');
+  modelCv.width = MW; modelCv.height = MH;
+  const modelCtx = modelCv.getContext('2d', { willReadFrequently: true });
+  let prevModel = null, recentMask = null, modelIdx = null;
+  const lastChange = new Float64Array(MW * MH);
+  function updateProjectionModel(snap, now) {
+    render(modelCtx, MW, MH, { ...snap, hud: { ...snap.hud, left: '', right: '' } }, now);
+    const d = modelCtx.getImageData(0, 0, MW, MH).data;
+    let changed = 0;
+    if (prevModel) {
+      for (let m = 0, j = 0; m < MW * MH; m++, j += 4) {
+        const c = Math.max(Math.abs(d[j] - prevModel[j]), Math.abs(d[j + 1] - prevModel[j + 1]), Math.abs(d[j + 2] - prevModel[j + 2]));
+        if (c > 6) { lastChange[m] = now; changed++; }
+      }
+    }
+    prevModel = d;
+    // Most of the picture changed (banner, flash): ignore everything briefly
+    if (changed > MW * MH * 0.25) suppressUntil = Math.max(suppressUntil, now + PROJ_LAG);
+    // Recently changed spots, grown by 2 pixels to cover calibration error
+    const rm = new Uint8Array(MW * MH);
+    for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) {
+      if (now - lastChange[y * MW + x] >= PROJ_LAG) continue;
+      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+        const yy = y + dy, xx = x + dx;
+        if (yy >= 0 && yy < MH && xx >= 0 && xx < MW) rm[yy * MW + xx] = 1;
+      }
+    }
+    recentMask = rm;
+  }
+
   function buildMaps() {
     gridMap = new Int16Array(BW * bH).fill(-1);
+    modelIdx = new Int32Array(BW * bH).fill(-1);
+    const ML = layout(MW, MH, cfg);
     for (let y = 0; y < bH; y++) for (let x = 0; x < BW; x++) {
       const { u, v } = applyH(H, (x + 0.5) / BW, (y + 0.5) / bH);
-      if (u >= 0 && u < 1 && v >= 0 && v < 1) gridMap[y * BW + x] = Math.floor(v * cfg.rows) * cfg.cols + Math.floor(u * cfg.cols);
+      if (u >= 0 && u < 1 && v >= 0 && v < 1) {
+        gridMap[y * BW + x] = Math.floor(v * cfg.rows) * cfg.cols + Math.floor(u * cfg.cols);
+        const mx = Math.min(MW - 1, Math.floor(ML.gx + u * ML.gw)), my = Math.min(MH - 1, Math.floor(ML.gy + v * ML.gh));
+        modelIdx[y * BW + x] = my * MW + mx;
+      }
     }
     edgeMap = new Uint8Array(BW * bH);
     for (let y = 0; y < bH; y++) for (let x = 0; x < BW; x++) {
@@ -1027,7 +1329,7 @@ function startControl() {
   // `frame` is 1 value per pixel (gray) or 3 (RGB). The change at a pixel is
   // the biggest change in any color channel.
   function processGray(now, frame) {
-    const key = `${bH}|${cfg.rows}|${cfg.cols}|${calibPts}`;
+    const key = `${bH}|${cfg.rows}|${cfg.cols}|${cfg.margin}|${calibPts}`;
     if (key !== mapKey) { mapKey = key; buildMaps(); }
     const last = prevGray;
     prevGray = frame;
@@ -1049,15 +1351,18 @@ function startControl() {
     noiseEma = noiseEma ? noiseEma * 0.95 + noise * 0.05 : noise;
     thrNow = cfg.ballAuto ? Math.max(8, Math.min(60, Math.round(noiseEma * 5 + 6))) : cfg.ballSens;
 
-    let count = 0, sx = 0, sy = 0, edge = false, byPerson = false;
+    const projMasked = i => i >= 0 && i < gray.length && recentMask && modelIdx[i] >= 0 && recentMask[modelIdx[i]] === 1;
+    let count = 0, sx = 0, sy = 0, edge = false, byPerson = false, byProj = false;
     const pts = cfg.showMotion ? [] : null;
     for (let i = 0; i < gray.length; i++) {
       if (gridMap[i] < 0 || mask[i]) continue;
+      if (recentMask && recentMask[modelIdx[i]]) continue;   // projected picture changed here
       if (change(i) > thrNow) {
         count++; sx += i % BW; sy += (i / BW) | 0;
         // Blob cut off by the grid edge or a person = only part of the ball is visible
         if (edgeMap[i]) edge = true;
         if (mask[i - 1] || mask[i + 1] || mask[i - BW] || mask[i + BW]) { edge = true; byPerson = true; }
+        if (projMasked(i - 1) || projMasked(i + 1) || projMasked(i - BW) || projMasked(i + BW)) byProj = true;
         pts?.push(i);
       }
     }
@@ -1076,7 +1381,7 @@ function startControl() {
     if (count > 0 && count < cfg.ballMin && !ev) ballInfo = { t: now, text: `Tiny motion only (${count} px). If that was the ball, lower "Smallest ball".` };
     if (count >= cfg.ballMin) {
       ev ||= { start: now, frames: [] };
-      ev.frames.push({ count, x: sx / count, y: sy / count, edge, byPerson });
+      ev.frames.push({ count, x: sx / count, y: sy / count, edge, byPerson, byProj, mask: recentMask });
       ev.last = now;
     }
     if (ev && (now - ev.last > 100 || now - ev.start > 700)) {
@@ -1100,11 +1405,32 @@ function startControl() {
         ballCooldown = now + 450;   // also skip the bounce coming back out
         ev = null; return;
       }
-      const cx = (best.x + 0.5) / BW, cy = (best.y + 0.5) / bH;
+      // The ball vanished into a spot where the picture is moving (e.g. a
+      // meteor): follow its direction into that spot and aim at the middle.
+      let px = best.x, py = best.y;
+      if (best.byProj && best.mask) {
+        const pf = ev.frames[bi - 1];
+        let dx = 0, dy = -1;
+        if (pf) { dx = best.x - pf.x; dy = best.y - pf.y; const l = Math.hypot(dx, dy) || 1; dx /= l; dy /= l; }
+        let inStart = -1, inEnd = -1, k = 1;
+        for (; k <= 16; k++) {
+          const x = Math.round(best.x + dx * k), y = Math.round(best.y + dy * k);
+          if (x < 0 || y < 0 || x >= BW || y >= bH) break;
+          const i = y * BW + x, m = modelIdx[i] >= 0 && best.mask[modelIdx[i]] === 1;
+          if (m && inStart < 0) inStart = k;
+          if (!m && inStart >= 0) { inEnd = k; break; }
+        }
+        if (inStart >= 0) {
+          const mid = (inStart + (inEnd > 0 ? inEnd : k)) / 2;
+          px = best.x + dx * mid; py = best.y + dy * mid;
+        }
+      }
+      const cx = (px + 0.5) / BW, cy = (py + 0.5) / bH;
       const { u, v } = applyH(H, cx, cy);
       if (u >= 0 && u < 1 && v >= 0 && v < 1) {
         const tile = Math.floor(v * cfg.rows) * cfg.cols + Math.floor(u * cfg.cols);
         ballHits.push(tile);
+        shots.push({ u, v, src: 'ball' });
         lastBallHit = { x: cx, y: cy, t: now };
         ballInfo = { t: now, text: `Hit counted on tile ${tile + 1}.` };
         ballCooldown = now + 250;
@@ -1141,7 +1467,7 @@ function startControl() {
   // ---------- Main loop ----------
   // The loop runs on this page's animation frames. When this page is hidden
   // (e.g. minimized behind the projector), the projector's frames drive it.
-  let lastVT = -1, poses = [], prev = [], det = 0, detT = performance.now(), fps = 0, lastStep = 0, lastSig = '';
+  let lastVT = -1, poses = [], prev = [], det = 0, detT = performance.now(), fps = 0, lastStep = 0, lastSnapshot = null;
   function loop() {
     step();
     requestAnimationFrame(loop);
@@ -1192,7 +1518,11 @@ function startControl() {
     pressed.forEach((v, i) => { if (v && !prev[i]) edges.push(i); });
     prev = pressed;
 
-    const hud = tickGame(now, pressed, edges);
+    // Touching (hands/feet modes) also counts as a shot in free-target games
+    if (!ballMode) for (const f of gridFeet) shots.push({ u: f.u, v: f.v, src: 'touch' });
+
+    const hud = tickGame(now, pressed, edges, shots);
+    shots.length = 0;
     hud.msg = G.msg;
 
     const snap = {
@@ -1202,12 +1532,13 @@ function startControl() {
       feet: cfg.showFeet ? gridFeet : [],
       hitFlash: now < G.flashUntil,
       still: ballMode,
+      scene: G.mode === 'meteor' ? meteorScene(now) : null,
     };
 
-    // When the projected picture changes, the camera sees it as motion.
-    // Ignore ball detection briefly so that doesn't count as a hit.
-    const sig = snap.tiles.join() + '|' + hud.msg + '|' + snap.hitFlash + '|' + calibrating;
-    if (sig !== lastSig) { lastSig = sig; suppressUntil = Math.max(suppressUntil, now + 350); }
+    // The camera sees changes in the projected picture as motion, so tell the
+    // ball detector where the picture just changed.
+    if (ballMode) updateProjectionModel(snap, now);
+    lastSnapshot = snap;
 
     const { ctx, W, H: Hp } = fitCanvas(pv);
     render(ctx, W, Hp, snap, now);
@@ -1249,11 +1580,14 @@ function startControl() {
   window.__floorGrid = {
     applyH, homography, cfg, G, sim, step, pointsOf, setCalibration, health,
     setPoses(p) { poses = p; }, sortCorners,
+    get lastSnapshot() { return lastSnapshot; },
+    get ballInfo() { return ballInfo; },
+    feed(frame, h) { if (bH !== h) { bH = h; prevGray = null; mapKey = ''; } processGray(performance.now(), frame); },
     get lastEvFrames() { return lastEvFrames; },
     async useStream(s) { video.srcObject = s; await video.play(); camOn = true; $('camEmpty').hidden = true; },
     // Feed synthetic grayscale frames (BW x h) to the ball detector; returns hit tiles
     ballTest(frames, h, dt = 33) {
-      bH = h; prevGray = null; mapKey = ''; ev = null; suppressUntil = 0; ballCooldown = 0;
+      bH = h; prevGray = null; mapKey = ''; ev = null; suppressUntil = 0; ballCooldown = 0; recentMask = null;
       const out = [];
       let t = performance.now();
       for (const f of frames) { processGray(t, f); out.push(...ballHits); ballHits.length = 0; t += dt; }
