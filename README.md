@@ -1,5 +1,8 @@
 # Floor Grid
 
+> **Proprietary software. © 2026 Trend Vibe Creatives. All rights reserved.**
+> Using, copying, hosting or selling this software without written permission is not allowed. See [LICENSE](LICENSE).
+
 Interactive projected tile games with no wiring. A projector shows a grid on a wall or floor,
 a camera watches the players, and an AI pose model (MediaPipe) detects which tile a hand or foot is on.
 

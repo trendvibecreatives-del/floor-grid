@@ -1,4 +1,9 @@
 <!doctype html>
+<!--
+  Floor Grid - proprietary software.
+  Copyright (c) 2026 Trend Vibe Creatives. All rights reserved.
+  Using, copying, hosting or selling this software without written permission is not allowed.
+-->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -58,6 +63,20 @@
 </style>
 </head>
 <body>
+
+<!-- ================= LOCK SCREEN ================= -->
+<div id="lock" hidden style="min-height:100%;display:grid;place-items:center;padding:24px">
+  <div class="card" style="max-width:420px;width:100%">
+    <h2 style="font-size:18px;margin:0 0 8px">This copy is locked</h2>
+    <p class="hint" style="margin:0 0 14px">Floor Grid is proprietary software (© 2026 Trend Vibe Creatives, all rights reserved). It only runs on the official link, or with the owner key.</p>
+    <form id="lockForm" class="row">
+      <input id="lockKey" type="password" placeholder="Owner key" autocomplete="off"
+             style="flex:1;min-width:0;background:#0d121c;border:1px solid var(--line);border-radius:8px;padding:8px 10px">
+      <button type="submit">Unlock</button>
+    </form>
+    <p id="lockMsg" class="hint bad" style="min-height:1.4em"></p>
+  </div>
+</div>
 
 <!-- ================= CONTROL PAGE ================= -->
 <div id="control" hidden>
@@ -185,7 +204,7 @@
 const IS_PROJ = new URLSearchParams(location.search).get('view') === 'projector';
 // Bump on every release. The projector reloads itself when the control page
 // runs a different version, so the two windows never get out of step.
-const APP_VERSION = '2026-10-28.9';
+const APP_VERSION = '2026-10-28.10';
 
 // Where the grid sits inside a W x H screen. A HUD band sits on top.
 function layout(W, H, s) {
@@ -495,7 +514,40 @@ function fitCanvas(cv) {
   return { ctx, W: r.width, H: r.height };
 }
 
-if (IS_PROJ) startProjector(); else startControl();
+// ---------- Owner lock ----------
+// Runs freely only on the official link. Anywhere else (a downloaded copy,
+// someone else's website) it asks once per browser for the owner key.
+const OFFICIAL_HOSTS = ['trendvibecreatives-del.github.io'];
+const OWNER_KEY_HASH = '68be6e5c918bf8abf882a6a92cbfae5ca578260d6383620092818ae452929460';
+async function sha256(text) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+const normKey = k => String(k || '').trim().toUpperCase();
+async function isUnlocked() {
+  if (OFFICIAL_HOSTS.includes(location.hostname)) return true;
+  try {
+    const k = localStorage.getItem('floorgrid.ownerKey');
+    return !!k && !!crypto.subtle && (await sha256(normKey(k))) === OWNER_KEY_HASH;
+  } catch { return false; }
+}
+function showLock() {
+  document.title = 'Floor Grid – Locked';
+  document.getElementById('lock').hidden = false;
+  document.getElementById('lockForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const msg = document.getElementById('lockMsg');
+    const k = normKey(document.getElementById('lockKey').value);
+    if (!k) { msg.textContent = 'Enter the owner key first.'; return; }
+    if (!crypto.subtle) { msg.textContent = 'Open this through START.bat (http://localhost), not as a file.'; return; }
+    if ((await sha256(k)) !== OWNER_KEY_HASH) { msg.textContent = 'That key is not right.'; return; }
+    try { localStorage.setItem('floorgrid.ownerKey', k); } catch {}
+    location.reload();
+  });
+}
+
+if (!(await isUnlocked())) showLock();
+else if (IS_PROJ) startProjector(); else startControl();
 
 // ======================================================================
 // Projector window: draws whatever state the control page sends it
