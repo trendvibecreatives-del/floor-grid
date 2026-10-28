@@ -951,6 +951,31 @@ function startControl() {
     }
   }
 
+  // ---------- Camera health: is the picture live, and is it bright enough? ----------
+  const hcv = document.createElement('canvas');
+  hcv.width = 32; hcv.height = 18;
+  const hctx = hcv.getContext('2d', { willReadFrequently: true });
+  const health = { bright: null, lastFrameAt: 0, lastVT: -1, checkedAt: 0 };
+  function checkCamera(now) {
+    if (!camOn || video.readyState < 2) return;
+    if (video.currentTime !== health.lastVT) { health.lastVT = video.currentTime; health.lastFrameAt = now; }
+    if (now - health.checkedAt < 500) return;
+    health.checkedAt = now;
+    hctx.drawImage(video, 0, 0, 32, 18);
+    const d = hctx.getImageData(0, 0, 32, 18).data;
+    let sum = 0;
+    for (let j = 0; j < d.length; j += 4) sum += (d[j] * 77 + d[j + 1] * 150 + d[j + 2] * 29) >> 8;
+    health.bright = Math.round(sum / (d.length / 4) / 2.55);   // 0-100 %
+  }
+  function cameraProblem(now) {
+    if (!health.lastFrameAt) return null;
+    if (now - health.lastFrameAt > 2000) return 'Camera picture is frozen. Unplug and replug the camera, then press Restart in step 2.';
+    if (health.bright !== null && health.bright < 6) return `Camera sees almost nothing (brightness ${health.bright}%). Check the lens cover / privacy shutter, or turn on a light.`;
+    if (health.bright !== null && health.bright < 15) return `Camera picture is very dark (brightness ${health.bright}%). Add a dim light behind the players so the AI can see them.`;
+    if (health.bright !== null && health.bright > 92) return `Camera picture is washed out (brightness ${health.bright}%). Point it away from bright lights or windows.`;
+    return null;
+  }
+
   // ---------- Main loop ----------
   // The loop runs on this page's animation frames. When this page is hidden
   // (e.g. minimized behind the projector), the projector's frames drive it.
@@ -965,6 +990,7 @@ function startControl() {
     lastStep = now;
 
     const ballMode = cfg.track === 'ball';
+    checkCamera(now);
     if (camOn && video.readyState >= 2 && video.currentTime !== lastVT) {
       lastVT = video.currentTime;
       if (landmarker) { try { poses = landmarker.detectForVideo(video, now).landmarks || []; det++; } catch {} }
@@ -1030,12 +1056,14 @@ function startControl() {
     const what = cfg.track === 'hands' ? 'hands' : cfg.track === 'feet' ? 'feet' : 'hands/feet';
     const projOk = now - lastTick < 1500;
     $('stats').textContent = (camOn
-      ? `AI ${fps.toFixed(0)} fps · ${poses.length} ${poses.length === 1 ? 'person' : 'people'} · ${gridFeet.length} ${what} on grid · `
+      ? `Camera ${now - health.lastFrameAt < 2000 ? 'live' : 'frozen'}${health.bright !== null ? ` · brightness ${health.bright}%` : ''} · AI ${fps.toFixed(0)} fps · ${poses.length} ${poses.length === 1 ? 'person' : 'people'} · ${gridFeet.length} ${what} on grid · `
       : '') + `Projector: ${projOk ? 'connected' : 'not connected'}`;
 
     // Plain-language diagnosis of what's missing
     let d, ok = false;
+    const camIssue = camOn ? cameraProblem(now) : null;
     if (!camOn) d = 'Camera is off. Start it in step 2.';
+    else if (camIssue) d = camIssue;
     else if (!landmarker) d = modelLoading ? 'Loading the AI model…' : 'AI model not loaded. Check the internet connection, then press Restart in step 2.';
     else if (!H) d = 'Not calibrated, so tiles can\'t react yet. Press Calibrate in step 3.';
     else if (ballMode) {
@@ -1057,7 +1085,8 @@ function startControl() {
 
   // Expose a tiny hook for automated checks
   window.__floorGrid = {
-    applyH, homography, cfg, G, sim, step, pointsOf, setCalibration,
+    applyH, homography, cfg, G, sim, step, pointsOf, setCalibration, health,
+    async useStream(s) { video.srcObject = s; await video.play(); camOn = true; $('camEmpty').hidden = true; },
     // Feed synthetic grayscale frames (BW x h) to the ball detector; returns hit tiles
     ballTest(frames, h, dt = 33) {
       bH = h; prevGray = null; mapKey = ''; ev = null; suppressUntil = 0; ballCooldown = 0;
