@@ -26,14 +26,20 @@ Players throw soft balls at the wall instead of touching it.
    This hides players' shadows from the camera and makes the hit point line up with the tiles.
 2. Set **Track** to **Ball (throwing)** and calibrate as usual.
 3. Players throw from a line 3+ m from the wall. Soft foam or plastic balls work best.
-4. Open **Settings**, tick **Show motion on camera**, and throw a few balls:
+4. Read the message under the camera view. In ball mode it shows the threshold, how much motion
+   it sees right now, and what happened with the last throw ("Hit counted on tile 5",
+   "Too much motion", "hidden behind a player", and so on).
+5. Open **Settings**, tick **Show motion on camera**, and throw a few balls:
    - Red pixels = what the camera sees moving. A yellow ring = where it counted the hit.
-   - Throws not counted → lower **Motion threshold** (try 20–25) or **Smallest ball**.
-   - Hits counted with no ball → raise **Motion threshold** (try 45–60).
+   - Leave **Auto threshold** on. It adjusts to how dark and grainy your camera picture is.
+   - Throws not counted → lower **Smallest ball**, or untick Auto and lower the threshold.
    - Hits counted on the wrong tile → move the camera closer to the projector and recalibrate.
-5. Games that work with balls: **Test tiles**, **Hit the lights**, **Tic-tac-toe (2 teams)**.
+   - "Hidden behind a player" → mount the camera higher (above the projector, looking over
+     players' heads), or have players throw from the side.
+6. Games that work with balls: **Test tiles**, **Hit the lights**, **Tic-tac-toe (2 teams)**.
 
 Notes:
+- In ball mode, empty tiles are light gray-blue, not black, so the wall is lit and the ball shows up.
 - Tiles don't blink or pulse in ball mode, because the camera would read blinking as motion.
 - Right after the picture changes (a hit, a new target), the app ignores motion for about 0.35 s.
   Two balls thrown at almost the same moment may count as one.
