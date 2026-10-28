@@ -1,0 +1,852 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Floor Grid</title>
+<style>
+  :root {
+    --bg: #0b0e14; --card: #131824; --line: #232b3b; --text: #e6e9ef; --muted: #8b95a8;
+    --accent: #22d3ee; --good: #22c55e; --warn: #facc15; --bad: #ef4444;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  [hidden] { display: none !important; }
+  button, select, input { font: inherit; color: inherit; }
+  button { background: var(--accent); color: #04232a; border: 0; border-radius: 8px; padding: 8px 14px;
+    font-weight: 600; cursor: pointer; }
+  button.ghost { background: transparent; color: var(--text); border: 1px solid var(--line); }
+  button:disabled { opacity: .45; cursor: default; }
+  select, input[type=number] { background: #0d121c; border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; }
+  input[type=number] { width: 80px; }
+
+  /* ---------- Control page ---------- */
+  #control { display: flex; flex-direction: column; min-height: 100%; }
+  header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 18px; margin: 0; }
+  #status { color: var(--muted); font-size: 13px; }
+  #stats { margin-left: auto; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; padding: 16px 20px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .views { display: grid; gap: 16px; align-content: start; }
+  aside { display: grid; gap: 12px; align-content: start; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+  .card-h { display: flex; gap: 10px; align-items: baseline; margin-bottom: 10px; font-weight: 600; }
+  .card-h small { color: var(--muted); font-weight: 400; }
+  .card h2 { font-size: 14px; margin: 0 0 10px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .hint { color: var(--muted); font-size: 12.5px; margin: 8px 0 0; }
+  .camwrap { position: relative; background: #000; border-radius: 8px; overflow: hidden; min-height: 200px;
+    display: grid; place-items: center; }
+  #camCanvas { width: 100%; height: auto; display: block; }
+  #camCanvas.calibrating { cursor: crosshair; outline: 3px solid var(--warn); outline-offset: -3px; }
+  #camEmpty { position: absolute; color: var(--muted); }
+  #preview { width: 100%; aspect-ratio: 16 / 9; display: block; border-radius: 8px; touch-action: none; cursor: pointer; }
+  #calibHelp { font-size: 14px; color: var(--warn); font-weight: 600; min-height: 1.4em; }
+  details summary { cursor: pointer; font-weight: 600; }
+  .settings { display: grid; grid-template-columns: 1fr auto; gap: 8px 10px; align-items: center; margin-top: 12px; }
+  .settings label { color: var(--muted); }
+  .ok { color: var(--good); } .bad { color: var(--bad); }
+
+  /* ---------- Projector page ---------- */
+  #projector { position: fixed; inset: 0; background: #000; }
+  #projCanvas { width: 100%; height: 100%; display: block; touch-action: none; }
+  #projBar { position: fixed; top: 10px; right: 10px; display: flex; gap: 8px; align-items: center;
+    background: rgba(20,24,36,.9); padding: 8px 10px; border-radius: 10px; color: var(--muted); font-size: 13px; }
+  #projector.hide-cursor, #projector.hide-cursor * { cursor: none; }
+</style>
+</head>
+<body>
+
+<!-- ================= CONTROL PAGE ================= -->
+<div id="control" hidden>
+  <header>
+    <h1>Floor Grid</h1>
+    <span id="status">Starting…</span>
+    <span id="stats"></span>
+  </header>
+  <main>
+    <section class="views">
+      <div class="card">
+        <div class="card-h">Camera <small id="camInfo">Shows what the AI sees. Green dots = hands/feet on the grid.</small></div>
+        <div class="camwrap">
+          <canvas id="camCanvas"></canvas>
+          <div id="camEmpty">Camera is off. Start it in step 2.</div>
+        </div>
+        <p id="calibHelp"></p>
+      </div>
+      <div class="card">
+        <div class="card-h">Grid preview <small>Same image as the projector. Click or hold tiles to test without a camera.</small></div>
+        <canvas id="preview"></canvas>
+      </div>
+    </section>
+
+    <aside>
+      <div class="card">
+        <h2>1. Projector</h2>
+        <button id="openProj">Open projector window</button>
+        <p class="hint">Drag the new window onto the projector screen and press its Fullscreen button. Works on a wall or the floor. No projector yet? Skip this and use the preview.</p>
+      </div>
+
+      <div class="card">
+        <h2>2. Camera</h2>
+        <div class="row">
+          <select id="camSelect" style="flex:1;min-width:0"><option value="">Default camera</option></select>
+          <button id="startCam">Start</button>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <label for="model" style="color:var(--muted)">AI model</label>
+          <select id="model">
+            <option value="lite">Fast (lite)</option>
+            <option value="full">Accurate (full)</option>
+          </select>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <label for="track" style="color:var(--muted)">Track</label>
+          <select id="track">
+            <option value="hands">Hands (wall)</option>
+            <option value="feet">Feet (floor)</option>
+            <option value="both">Hands + feet</option>
+          </select>
+        </div>
+        <p class="hint" id="trackHint"></p>
+      </div>
+
+      <div class="card">
+        <h2>3. Calibrate</h2>
+        <div class="row">
+          <button id="calib">Calibrate</button>
+          <button id="clearCalib" class="ghost">Clear</button>
+        </div>
+        <p class="hint" id="calibState"></p>
+      </div>
+
+      <div class="card">
+        <h2>4. Play</h2>
+        <div class="row">
+          <select id="mode" style="flex:1">
+            <option value="test">Test tiles</option>
+            <option value="hits">Hit the lights</option>
+            <option value="lava">Lava floor</option>
+          </select>
+          <button id="start">Start</button>
+          <button id="stop" class="ghost">Stop</button>
+        </div>
+        <p class="hint" id="modeHint"></p>
+      </div>
+
+      <details class="card">
+        <summary>Settings</summary>
+        <div class="settings">
+          <label for="rows">Rows</label><input id="rows" type="number" min="1" max="12">
+          <label for="cols">Columns</label><input id="cols" type="number" min="1" max="16">
+          <label for="dwell">Touch delay (ms)</label><input id="dwell" type="number" min="0" max="2000" step="10">
+          <label for="minVis">Detection confidence (0–1)</label><input id="minVis" type="number" min="0" max="1" step="0.05">
+          <label for="margin">Grid margin (0–0.3)</label><input id="margin" type="number" min="0" max="0.3" step="0.01">
+          <label for="roundSec">Round length (s)</label><input id="roundSec" type="number" min="10" max="600" step="5">
+          <label for="showFeet">Show tracked points on grid</label><input id="showFeet" type="checkbox">
+          <label for="sound">Sound</label><input id="sound" type="checkbox">
+        </div>
+        <p class="hint">Touch delay: how long a hand or foot must stay on a tile before it counts. Raise it if tiles flicker or trigger when people just reach toward the wall.</p>
+      </details>
+    </aside>
+  </main>
+  <video id="video" playsinline muted hidden></video>
+</div>
+
+<!-- ================= PROJECTOR PAGE ================= -->
+<div id="projector" hidden>
+  <canvas id="projCanvas"></canvas>
+  <div id="projBar">
+    <span id="projMsg">Projector view</span>
+    <button id="fsBtn">Fullscreen</button>
+  </div>
+</div>
+
+<script type="module">
+// ======================================================================
+// Shared: layout + drawing (used by both the preview and projector)
+// ======================================================================
+const IS_PROJ = new URLSearchParams(location.search).get('view') === 'projector';
+
+// Where the grid sits inside a W x H screen. A HUD band sits on top.
+function layout(W, H, s) {
+  const band = Math.round(H * 0.09);
+  const m = Math.round(Math.min(W, H) * s.margin);
+  return { gx: m, gy: band + m, gw: W - 2 * m, gh: H - band - 2 * m, band };
+}
+
+function tileAt(x, y, W, H, s) {
+  const L = layout(W, H, s);
+  const u = (x - L.gx) / L.gw, v = (y - L.gy) / L.gh;
+  if (u < 0 || u >= 1 || v < 0 || v >= 1) return -1;
+  return Math.floor(v * s.rows) * s.cols + Math.floor(u * s.cols);
+}
+
+function tileColor(k, now) {
+  switch (k) {
+    case 'test':   return '#22d3ee';
+    case 'target': return `rgba(34,197,94,${0.55 + 0.45 * Math.sin(now / 110)})`;
+    case 'flash':  return '#ecfccb';
+    case 'warn':   return Math.floor(now / 140) % 2 ? '#facc15' : '#3b3006';
+    case 'lava':   return '#ef4444';
+    default:       return '#0d1117';
+  }
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function render(ctx, W, H, s, now) {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+  if (!s) return;
+  const L = layout(W, H, s);
+  const tw = L.gw / s.cols, th = L.gh / s.rows;
+  const t = Math.min(tw, th);
+  const pad = Math.max(2, t * 0.05), rad = t * 0.08;
+
+  for (let r = 0; r < s.rows; r++) {
+    for (let c = 0; c < s.cols; c++) {
+      const i = r * s.cols + c, k = s.tiles[i] || '';
+      const x = L.gx + c * tw + pad, y = L.gy + r * th + pad, w = tw - 2 * pad, h = th - 2 * pad;
+      roundRect(ctx, x, y, w, h, rad);
+      ctx.fillStyle = tileColor(k, now);
+      ctx.fill();
+      ctx.lineWidth = Math.max(2, t * 0.02);
+      ctx.strokeStyle = k ? 'rgba(255,255,255,.25)' : '#2b3446';
+      ctx.stroke();
+      if (s.pressed[i]) {
+        const inset = Math.max(3, t * 0.04);
+        roundRect(ctx, x + inset, y + inset, w - 2 * inset, h - 2 * inset, rad * 0.7);
+        ctx.lineWidth = Math.max(4, t * 0.045);
+        ctx.strokeStyle = '#fff';
+        ctx.stroke();
+      }
+    }
+  }
+
+  if (s.hitFlash) { ctx.fillStyle = 'rgba(239,68,68,.35)'; ctx.fillRect(0, 0, W, H); }
+
+  for (const f of s.feet || []) {
+    ctx.beginPath();
+    ctx.arc(L.gx + f.u * L.gw, L.gy + f.v * L.gh, Math.max(5, t * 0.04), 0, Math.PI * 2);
+    ctx.fillStyle = '#f0abfc';
+    ctx.fill();
+  }
+
+  // HUD band
+  const fs = Math.max(12, L.band * 0.55);
+  ctx.font = `700 ${fs}px system-ui, sans-serif`;
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#e6e9ef';
+  ctx.textAlign = 'left';  ctx.fillText(s.hud.left || '', L.gx, L.band / 2);
+  ctx.textAlign = 'right'; ctx.fillText(s.hud.right || '', L.gx + L.gw, L.band / 2);
+
+  // Calibration markers at the 4 grid corners
+  if (s.calibrating) {
+    ctx.lineWidth = Math.max(3, t * 0.02);
+    ctx.strokeStyle = '#fff';
+    ctx.strokeRect(L.gx, L.gy, L.gw, L.gh);
+    const corners = [[L.gx, L.gy], [L.gx + L.gw, L.gy], [L.gx + L.gw, L.gy + L.gh], [L.gx, L.gy + L.gh]];
+    const R = Math.min(W, H) * 0.035;
+    corners.forEach(([cx, cy], n) => {
+      const active = n === s.calibNext;
+      ctx.strokeStyle = active ? '#facc15' : '#fff';
+      ctx.lineWidth = Math.max(3, R * 0.15);
+      ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx - R * 1.4, cy); ctx.lineTo(cx + R * 1.4, cy);
+      ctx.moveTo(cx, cy - R * 1.4); ctx.lineTo(cx, cy + R * 1.4); ctx.stroke();
+      ctx.fillStyle = active ? '#facc15' : '#fff';
+      ctx.font = `800 ${R * 1.3}px system-ui, sans-serif`;
+      ctx.textAlign = 'center';
+      const dx = n === 0 || n === 3 ? 1 : -1, dy = n < 2 ? 1 : -1;
+      ctx.fillText(String(n + 1), cx + dx * R * 2.2, cy + dy * R * 2.2);
+    });
+  }
+
+  // Big center message
+  if (s.hud.msg) {
+    const lines = s.hud.msg.split('\n');
+    const big = Math.min(L.gw, L.gh) * 0.14;
+    const boxH = big * (lines.length * 1.25 + 0.6);
+    ctx.fillStyle = 'rgba(0,0,0,.72)';
+    ctx.fillRect(L.gx, L.gy + L.gh / 2 - boxH / 2, L.gw, boxH);
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    lines.forEach((ln, i) => {
+      const size = i === 0 ? big : big * 0.5;
+      ctx.font = `800 ${size}px system-ui, sans-serif`;
+      ctx.fillText(ln, L.gx + L.gw / 2, L.gy + L.gh / 2 - boxH / 2 + big * 0.9 + i * big * 1.1);
+    });
+  }
+}
+
+// Size a canvas to its CSS box at device pixel ratio; returns CSS size.
+function fitCanvas(cv) {
+  const dpr = window.devicePixelRatio || 1;
+  const r = cv.getBoundingClientRect();
+  const w = Math.max(1, Math.round(r.width * dpr)), h = Math.max(1, Math.round(r.height * dpr));
+  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, W: r.width, H: r.height };
+}
+
+if (IS_PROJ) startProjector(); else startControl();
+
+// ======================================================================
+// Projector window: draws whatever state the control page sends it
+// ======================================================================
+function startProjector() {
+  document.title = 'Floor Grid – Projector';
+  const root = document.getElementById('projector');
+  root.hidden = false;
+  const cv = document.getElementById('projCanvas');
+  const bar = document.getElementById('projBar');
+  const msg = document.getElementById('projMsg');
+  let state = null, lastMsg = 0;
+
+  if (!window.opener) msg.textContent = 'Open this from the control page';
+
+  window.addEventListener('message', e => {
+    if (e.source !== window.opener || !e.data || e.data.type !== 'state') return;
+    state = e.data.s;
+    lastMsg = performance.now();
+  });
+
+  document.getElementById('fsBtn').onclick = () => document.documentElement.requestFullscreen?.();
+  document.addEventListener('keydown', e => { if (e.key === 'f' || e.key === 'F') document.documentElement.requestFullscreen?.(); });
+  document.addEventListener('fullscreenchange', () => { bar.hidden = !!document.fullscreenElement; });
+
+  let idle;
+  window.addEventListener('pointermove', () => {
+    root.classList.remove('hide-cursor');
+    clearTimeout(idle);
+    idle = setTimeout(() => root.classList.add('hide-cursor'), 2000);
+  });
+
+  // Mouse/touch on the projector also acts as a "foot" (handy for testing)
+  const send = d => window.opener?.postMessage(d, '*');
+  cv.addEventListener('pointerdown', e => {
+    if (!state) return;
+    cv.setPointerCapture(e.pointerId);
+    const r = cv.getBoundingClientRect();
+    send({ type: 'press', id: 'p' + e.pointerId, idx: tileAt(e.clientX - r.left, e.clientY - r.top, r.width, r.height, state) });
+  });
+  cv.addEventListener('pointermove', e => {
+    if (!state || !cv.hasPointerCapture(e.pointerId)) return;
+    const r = cv.getBoundingClientRect();
+    send({ type: 'press', id: 'p' + e.pointerId, idx: tileAt(e.clientX - r.left, e.clientY - r.top, r.width, r.height, state) });
+  });
+  const up = e => send({ type: 'release', id: 'p' + e.pointerId });
+  cv.addEventListener('pointerup', up);
+  cv.addEventListener('pointercancel', up);
+
+  (function frame() {
+    const { ctx, W, H } = fitCanvas(cv);
+    render(ctx, W, H, state, performance.now());
+    send({ type: 'tick' });
+    if (window.opener && performance.now() - lastMsg > 1500) msg.textContent = 'Waiting for control page…';
+    else if (window.opener) msg.textContent = 'Connected';
+    requestAnimationFrame(frame);
+  })();
+}
+
+// ======================================================================
+// Control page: camera, AI foot tracking, calibration, games
+// ======================================================================
+function startControl() {
+  document.getElementById('control').hidden = false;
+  const $ = id => document.getElementById(id);
+
+  // ---------- Settings (saved in this browser) ----------
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem('floorgrid.' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+    set(k, v) { try { localStorage.setItem('floorgrid.' + k, JSON.stringify(v)); } catch {} },
+  };
+  const cfg = {
+    rows: 3, cols: 3, dwell: 150, minVis: 0.5, margin: 0.04, roundSec: 45,
+    showFeet: true, sound: true, model: 'lite', track: 'hands', ...store.get('cfg', {}),
+  };
+  const saveCfg = () => store.set('cfg', cfg);
+
+  for (const k of ['rows', 'cols', 'dwell', 'minVis', 'margin', 'roundSec']) {
+    const el = $(k);
+    el.value = cfg[k];
+    el.addEventListener('change', () => {
+      const v = parseFloat(el.value);
+      if (!Number.isFinite(v)) { el.value = cfg[k]; return; }
+      const lo = parseFloat(el.min), hi = parseFloat(el.max);
+      cfg[k] = Math.min(hi, Math.max(lo, (k === 'rows' || k === 'cols') ? Math.round(v) : v));
+      el.value = cfg[k];
+      saveCfg();
+      if (k === 'rows' || k === 'cols') stopGame();
+    });
+  }
+  for (const k of ['showFeet', 'sound']) {
+    $(k).checked = cfg[k];
+    $(k).addEventListener('change', () => { cfg[k] = $(k).checked; saveCfg(); });
+  }
+  $('model').value = cfg.model;
+  const TRACK_HINTS = {
+    hands: 'Wall mode: put the camera behind the players (next to the projector), facing the wall.',
+    feet: 'Floor mode: mount the camera high so it sees the whole grid and players\' feet.',
+    both: 'Hands and feet both count.',
+  };
+  const showTrackHint = () => { $('trackHint').textContent = TRACK_HINTS[cfg.track]; };
+  $('track').value = cfg.track;
+  $('track').addEventListener('change', () => { cfg.track = $('track').value; saveCfg(); showTrackHint(); });
+  showTrackHint();
+
+  const setStatus = (t, cls = '') => { $('status').textContent = t; $('status').className = cls; };
+
+  // ---------- Sound ----------
+  let actx;
+  function beep(freq = 660, dur = 0.09, type = 'sine', vol = 0.2) {
+    if (!cfg.sound) return;
+    try {
+      actx ||= new AudioContext();
+      const o = actx.createOscillator(), g = actx.createGain();
+      o.type = type; o.frequency.value = freq;
+      g.gain.setValueAtTime(vol, actx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.001, actx.currentTime + dur);
+      o.connect(g).connect(actx.destination);
+      o.start(); o.stop(actx.currentTime + dur);
+    } catch {}
+  }
+
+  // ---------- Homography (camera image -> grid square) ----------
+  const UNIT = [[0, 0], [1, 0], [1, 1], [0, 1]];
+  function solve(A, b) {
+    const n = b.length, M = A.map((r, i) => [...r, b[i]]);
+    for (let c = 0; c < n; c++) {
+      let p = c;
+      for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r;
+      if (Math.abs(M[p][c]) < 1e-12) return null;
+      [M[c], M[p]] = [M[p], M[c]];
+      for (let r = 0; r < n; r++) {
+        if (r === c) continue;
+        const f = M[r][c] / M[c][c];
+        for (let k = c; k <= n; k++) M[r][k] -= f * M[c][k];
+      }
+    }
+    return M.map((r, i) => r[n] / r[i]);
+  }
+  function homography(src, dst) {
+    const A = [], b = [];
+    for (let i = 0; i < 4; i++) {
+      const [x, y] = src[i], [u, v] = dst[i];
+      A.push([x, y, 1, 0, 0, 0, -u * x, -u * y]); b.push(u);
+      A.push([0, 0, 0, x, y, 1, -v * x, -v * y]); b.push(v);
+    }
+    const h = solve(A, b);
+    return h ? [...h, 1] : null;
+  }
+  function applyH(h, x, y) {
+    const w = h[6] * x + h[7] * y + h[8];
+    return { u: (h[0] * x + h[1] * y + h[2]) / w, v: (h[3] * x + h[4] * y + h[5]) / w };
+  }
+
+  let calibPts = store.get('calib', null);     // 4 camera points (0..1), TL TR BR BL
+  let H = null, Hinv = null;
+  function setCalibration(pts) {
+    calibPts = pts;
+    H = pts ? homography(pts, UNIT) : null;
+    Hinv = pts ? homography(UNIT, pts) : null;
+    store.set('calib', pts);
+    $('calibState').innerHTML = H
+      ? '<span class="ok">Calibrated.</span> Recalibrate if the camera or projector moves.'
+      : 'Not calibrated. The grid must be visible on the floor and in the camera.';
+  }
+  setCalibration(calibPts);
+
+  let calibrating = false, newPts = [];
+  const CORNER_NAMES = ['top-left', 'top-right', 'bottom-right', 'bottom-left'];
+  function updateCalibHelp() {
+    $('calibHelp').textContent = calibrating
+      ? `Click corner ${newPts.length + 1} (${CORNER_NAMES[newPts.length]}) of the grid in the camera image. Esc to cancel.`
+      : '';
+    $('camCanvas').classList.toggle('calibrating', calibrating);
+  }
+  $('calib').onclick = () => {
+    if (!camOn) { setStatus('Start the camera first (step 2).', 'bad'); return; }
+    calibrating = true; newPts = [];
+    stopGame();
+    updateCalibHelp();
+  };
+  $('clearCalib').onclick = () => { calibrating = false; setCalibration(null); updateCalibHelp(); };
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && calibrating) { calibrating = false; updateCalibHelp(); }
+  });
+  $('camCanvas').addEventListener('click', e => {
+    if (!calibrating) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    newPts.push([(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height]);
+    beep(520, 0.06);
+    if (newPts.length === 4) {
+      calibrating = false;
+      const h = homography(newPts, UNIT);
+      if (h) { setCalibration(newPts); setStatus('Calibration saved.', 'ok'); }
+      else setStatus('Those 4 points did not make a valid shape. Try again.', 'bad');
+    }
+    updateCalibHelp();
+  });
+
+  // ---------- Camera ----------
+  const video = $('video');
+  let stream = null, camOn = false;
+  async function listCams() {
+    try {
+      const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+      const sel = $('camSelect'), cur = sel.value;
+      sel.innerHTML = '';
+      devs.forEach((d, i) => sel.add(new Option(d.label || `Camera ${i + 1}`, d.deviceId)));
+      if (!devs.length) sel.add(new Option('No camera found', ''));
+      if (cur) sel.value = cur;
+    } catch {}
+  }
+  async function startCamera() {
+    try {
+      stream?.getTracks().forEach(t => t.stop());
+      const id = $('camSelect').value;
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { deviceId: id ? { exact: id } : undefined, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 60 } },
+      });
+      video.srcObject = stream;
+      await video.play();
+      camOn = true;
+      $('camEmpty').hidden = true;
+      const st = stream.getVideoTracks()[0].getSettings();
+      await listCams();
+      if (st.deviceId) $('camSelect').value = st.deviceId;
+      $('startCam').textContent = 'Restart';
+      setStatus(`Camera on (${st.width}×${st.height} @ ${Math.round(st.frameRate || 0)}fps)`, 'ok');
+      if (!landmarker && !modelLoading) loadModel();
+    } catch (e) {
+      setStatus('Camera error: ' + (e.message || e.name), 'bad');
+    }
+  }
+  $('startCam').onclick = startCamera;
+  $('camSelect').onchange = () => { if (camOn) startCamera(); };
+  listCams();
+
+  // ---------- AI model (MediaPipe Pose) ----------
+  const MP = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
+  const MODELS = {
+    lite: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
+    full: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task',
+  };
+  let landmarker = null, modelLoading = false;
+  async function loadModel() {
+    modelLoading = true;
+    setStatus('Loading AI model…');
+    try {
+      const { FilesetResolver, PoseLandmarker } = await import(`${MP}/vision_bundle.mjs`);
+      const files = await FilesetResolver.forVisionTasks(`${MP}/wasm`);
+      const opts = delegate => ({
+        baseOptions: { modelAssetPath: MODELS[cfg.model], delegate },
+        runningMode: 'VIDEO', numPoses: 4,
+        minPoseDetectionConfidence: 0.5, minPosePresenceConfidence: 0.5, minTrackingConfidence: 0.5,
+      });
+      let lm, where = 'GPU';
+      try { lm = await PoseLandmarker.createFromOptions(files, opts('GPU')); }
+      catch { lm = await PoseLandmarker.createFromOptions(files, opts('CPU')); where = 'CPU'; }
+      landmarker = lm;
+      setStatus(`AI ready (${cfg.model}, ${where})`, 'ok');
+    } catch (e) {
+      setStatus('Could not load AI model (check internet): ' + (e.message || e), 'bad');
+    }
+    modelLoading = false;
+  }
+  $('model').onchange = () => {
+    cfg.model = $('model').value; saveCfg();
+    try { landmarker?.close(); } catch {}
+    landmarker = null;
+    if (camOn) loadModel();
+  };
+
+  // Points that can press a tile.
+  // Feet: midpoint of heel + toe, else ankle. Hands: index finger, else wrist.
+  function pointsOf(lm) {
+    const out = [], vis = p => p && (p.visibility ?? 1) >= cfg.minVis;
+    if (cfg.track !== 'hands') {
+      for (const [a, h, t] of [[27, 29, 31], [28, 30, 32]]) {
+        if (vis(lm[h]) && vis(lm[t])) out.push({ x: (lm[h].x + lm[t].x) / 2, y: (lm[h].y + lm[t].y) / 2 });
+        else if (vis(lm[a])) out.push({ x: lm[a].x, y: lm[a].y });
+      }
+    }
+    if (cfg.track !== 'feet') {
+      for (const [w, i] of [[15, 19], [16, 20]]) {
+        if (vis(lm[i])) out.push({ x: lm[i].x, y: lm[i].y });
+        else if (vis(lm[w])) out.push({ x: lm[w].x, y: lm[w].y });
+      }
+    }
+    return out;
+  }
+
+  // ---------- Inputs: camera feet + simulated (mouse) presses ----------
+  const sim = new Map();       // pointer id -> tile index
+  const presence = new Map();  // tile index -> {first, last}
+  const RELEASE_MS = 140;
+
+  function simPress(id, idx) { if (idx >= 0) sim.set(id, idx); else sim.delete(id); }
+  function simRelease(id) { sim.delete(id); }
+
+  let projWin = null;
+  $('openProj').onclick = () => {
+    projWin = window.open(location.href.split(/[?#]/)[0] + '?view=projector', 'floorgrid_projector', 'popup,width=1024,height=600');
+  };
+  window.addEventListener('message', e => {
+    if (!projWin || e.source !== projWin || !e.data) return;
+    if (e.data.type === 'press') simPress(e.data.id, e.data.idx);
+    if (e.data.type === 'release') simRelease(e.data.id);
+    if (e.data.type === 'tick' && document.hidden) step();
+  });
+
+  const pv = $('preview');
+  const pvTile = e => { const r = pv.getBoundingClientRect(); return tileAt(e.clientX - r.left, e.clientY - r.top, r.width, r.height, cfg); };
+  pv.addEventListener('pointerdown', e => { pv.setPointerCapture(e.pointerId); simPress('v' + e.pointerId, pvTile(e)); });
+  pv.addEventListener('pointermove', e => { if (pv.hasPointerCapture(e.pointerId)) simPress('v' + e.pointerId, pvTile(e)); });
+  pv.addEventListener('pointerup', e => simRelease('v' + e.pointerId));
+  pv.addEventListener('pointercancel', e => simRelease('v' + e.pointerId));
+
+  // ---------- Games ----------
+  const G = { mode: 'test', phase: 'play', tiles: [], score: 0, lives: 3, start: 0, end: 0,
+              goAt: 0, lastCount: 0, nextSpawn: 0, invuln: 0, flashUntil: 0, msg: '' };
+  const n = () => cfg.rows * cfg.cols;
+  const clearTiles = () => { G.tiles = Array.from({ length: n() }, () => ({ k: '', until: 0 })); };
+  clearTiles();
+
+  const HINTS = {
+    test: 'Tiles light up while someone touches or stands on them. Use this to check tracking.',
+    hits: 'Hit the pulsing green tile as fast as you can.',
+    lava: 'Yellow blinking = about to turn to lava. Stay off it before it turns red. 3 lives.',
+  };
+  const showHint = () => { $('modeHint').textContent = HINTS[$('mode').value]; };
+  $('mode').onchange = () => { showHint(); if ($('mode').value === 'test') startGame(); };
+  showHint();
+
+  function startGame() {
+    const now = performance.now();
+    clearTiles();
+    G.mode = $('mode').value;
+    G.score = 0; G.lives = 3; G.invuln = 0; G.flashUntil = 0; G.msg = '';
+    if (G.mode === 'test') { G.phase = 'play'; return; }
+    G.phase = 'countdown'; G.goAt = now + 3000; G.lastCount = 4;
+    actx?.resume?.();
+  }
+  function stopGame() {
+    clearTiles();
+    G.mode = 'test'; G.phase = 'play'; G.msg = '';
+    $('mode').value = 'test'; showHint();
+  }
+  $('start').onclick = startGame;
+  $('stop').onclick = stopGame;
+
+  const randFree = (pressed, kinds = ['']) => {
+    const free = [];
+    G.tiles.forEach((t, i) => { if (kinds.includes(t.k) && !pressed[i]) free.push(i); });
+    return free.length ? free[Math.floor(Math.random() * free.length)] : -1;
+  };
+  const fmtTime = ms => { const s = Math.max(0, Math.ceil(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+
+  function tickGame(now, pressed, edges) {
+    if (G.tiles.length !== n()) clearTiles();
+    G.msg = '';
+    const hud = { left: '', right: '' };
+
+    // timed tile changes
+    for (const t of G.tiles) {
+      if (t.k === 'flash' && now > t.until) t.k = '';
+      if (t.k === 'warn' && now > t.until) { t.k = 'lava'; t.until = now + 2600; }
+      else if (t.k === 'lava' && now > t.until) t.k = '';
+    }
+
+    if (G.mode === 'test') {
+      G.tiles.forEach((t, i) => { t.k = pressed[i] ? 'test' : ''; });
+      hud.left = 'Test mode';
+      hud.right = `${pressed.filter(Boolean).length} on`;
+      return hud;
+    }
+
+    if (G.phase === 'countdown') {
+      const left = Math.ceil((G.goAt - now) / 1000);
+      if (left !== G.lastCount) { G.lastCount = left; if (left > 0) beep(440, 0.12); }
+      if (now >= G.goAt) {
+        G.phase = 'play'; G.start = now; G.end = now + cfg.roundSec * 1000; G.nextSpawn = now + 400;
+        beep(880, 0.25);
+      } else G.msg = String(left);
+    }
+
+    if (G.phase === 'play' && G.mode === 'hits') {
+      for (const i of edges) {
+        if (G.tiles[i].k === 'target') {
+          G.score++;
+          G.tiles[i] = { k: 'flash', until: now + 220 };
+          beep(700 + Math.min(G.score, 30) * 15, 0.08, 'triangle');
+        }
+      }
+      const want = n() >= 12 ? 2 : 1;
+      while (G.tiles.filter(t => t.k === 'target').length < want) {
+        const i = randFree(pressed);
+        if (i < 0) break;
+        G.tiles[i] = { k: 'target', until: 0 };
+      }
+      if (now >= G.end) endGame(`Score ${G.score}`);
+    }
+
+    if (G.phase === 'play' && G.mode === 'lava') {
+      const elapsed = now - G.start;
+      G.score = Math.floor(elapsed / 1000);
+      const active = G.tiles.filter(t => t.k === 'warn' || t.k === 'lava').length;
+      if (now >= G.nextSpawn) {
+        if (active < Math.max(1, n() - 2)) {
+          const i = randFree([], ['']);
+          if (i >= 0) G.tiles[i] = { k: 'warn', until: now + 900 };
+        }
+        G.nextSpawn = now + Math.max(350, 1500 - elapsed / 60);
+      }
+      if (now > G.invuln && G.tiles.some((t, i) => t.k === 'lava' && pressed[i])) {
+        G.lives--; G.invuln = now + 1500; G.flashUntil = now + 300;
+        beep(140, 0.35, 'sawtooth', 0.25);
+        if (G.lives <= 0) endGame(`Survived ${G.score}s`);
+      }
+    }
+
+    if (G.phase === 'over') G.msg = G.overMsg;
+
+    const name = G.mode === 'hits' ? 'Hit the lights' : 'Lava floor';
+    hud.left = `${name} · ${G.mode === 'lava' ? G.score + 's' : 'Score ' + G.score}`;
+    hud.right = G.mode === 'hits'
+      ? (G.phase === 'play' ? fmtTime(G.end - now) : fmtTime(cfg.roundSec * 1000))
+      : '♥'.repeat(Math.max(0, G.lives));
+    return hud;
+  }
+  function endGame(line) {
+    G.phase = 'over';
+    G.overMsg = `Game over\n${line} · press Start to play again`;
+    G.tiles.forEach(t => { t.k = ''; });
+    beep(330, 0.2); setTimeout(() => beep(220, 0.35), 200);
+  }
+
+  // ---------- Camera overlay ----------
+  const cam = $('camCanvas'), cctx = cam.getContext('2d');
+  function drawCamera(feet) {
+    if (!camOn || video.readyState < 2) return;
+    if (cam.width !== video.videoWidth || cam.height !== video.videoHeight) {
+      cam.width = video.videoWidth; cam.height = video.videoHeight;
+    }
+    const W = cam.width, Hh = cam.height, k = W / 640;
+    cctx.drawImage(video, 0, 0, W, Hh);
+    const P = (u, v) => { const p = applyH(Hinv, u, v); return [p.u * W, p.v * Hh]; };
+
+    if (Hinv && !calibrating) {
+      cctx.strokeStyle = 'rgba(34,211,238,.9)';
+      cctx.lineWidth = 2 * k;
+      cctx.beginPath();
+      for (let c = 0; c <= cfg.cols; c++) { cctx.moveTo(...P(c / cfg.cols, 0)); cctx.lineTo(...P(c / cfg.cols, 1)); }
+      for (let r = 0; r <= cfg.rows; r++) { cctx.moveTo(...P(0, r / cfg.rows)); cctx.lineTo(...P(1, r / cfg.rows)); }
+      cctx.stroke();
+    }
+    const pts = calibrating ? newPts : [];
+    pts.forEach(([x, y], i) => {
+      cctx.fillStyle = '#facc15';
+      cctx.beginPath(); cctx.arc(x * W, y * Hh, 7 * k, 0, Math.PI * 2); cctx.fill();
+      cctx.font = `700 ${18 * k}px system-ui`; cctx.fillText(String(i + 1), x * W + 10 * k, y * Hh - 10 * k);
+    });
+    for (const f of feet) {
+      cctx.fillStyle = f.on ? '#22c55e' : '#94a3b8';
+      cctx.strokeStyle = '#000'; cctx.lineWidth = 2 * k;
+      cctx.beginPath(); cctx.arc(f.x * W, f.y * Hh, 8 * k, 0, Math.PI * 2); cctx.fill(); cctx.stroke();
+    }
+  }
+
+  // ---------- Main loop ----------
+  // The loop runs on this page's animation frames. When this page is hidden
+  // (e.g. minimized behind the projector), the projector's frames drive it.
+  let lastVT = -1, poses = [], prev = [], det = 0, detT = performance.now(), fps = 0, lastStep = 0;
+  function loop() {
+    step();
+    requestAnimationFrame(loop);
+  }
+  function step() {
+    const now = performance.now();
+    if (now - lastStep < 8) return;
+    lastStep = now;
+
+    if (camOn && landmarker && video.readyState >= 2 && video.currentTime !== lastVT) {
+      lastVT = video.currentTime;
+      try { poses = landmarker.detectForVideo(video, now).landmarks || []; det++; } catch {}
+    }
+    if (now - detT > 1000) { fps = det * 1000 / (now - detT); det = 0; detT = now; }
+
+    // Feet -> tiles
+    const camFeet = [], gridFeet = [], onTiles = new Set();
+    for (const lm of poses) {
+      for (const f of pointsOf(lm)) {
+        let on = false;
+        if (H) {
+          const { u, v } = applyH(H, f.x, f.y);
+          if (u >= 0 && u < 1 && v >= 0 && v < 1) {
+            on = true;
+            gridFeet.push({ u, v });
+            onTiles.add(Math.floor(v * cfg.rows) * cfg.cols + Math.floor(u * cfg.cols));
+          }
+        }
+        camFeet.push({ ...f, on });
+      }
+    }
+    for (const i of onTiles) {
+      const p = presence.get(i);
+      if (p) p.last = now; else presence.set(i, { first: now, last: now });
+    }
+    for (const [i, p] of presence) if (now - p.last > RELEASE_MS) presence.delete(i);
+
+    const pressed = Array.from({ length: n() }, () => false);
+    for (const [i, p] of presence) if (i < n() && now - p.first >= cfg.dwell) pressed[i] = true;
+    for (const i of sim.values()) if (i < n()) pressed[i] = true;
+    const edges = [];
+    pressed.forEach((v, i) => { if (v && !prev[i]) edges.push(i); });
+    prev = pressed;
+
+    const hud = tickGame(now, pressed, edges);
+    hud.msg = G.msg;
+
+    const snap = {
+      rows: cfg.rows, cols: cfg.cols, margin: cfg.margin,
+      tiles: G.tiles.map(t => t.k), pressed, hud,
+      calibrating, calibNext: newPts.length,
+      feet: cfg.showFeet ? gridFeet : [],
+      hitFlash: now < G.flashUntil,
+    };
+
+    const { ctx, W, H: Hp } = fitCanvas(pv);
+    render(ctx, W, Hp, snap, now);
+    if (projWin && !projWin.closed) projWin.postMessage({ type: 'state', s: snap }, '*');
+    drawCamera(camFeet);
+
+    $('stats').textContent = camOn
+      ? `AI ${fps.toFixed(0)} fps · ${poses.length} ${poses.length === 1 ? 'person' : 'people'} · ${gridFeet.length} ${cfg.track === 'hands' ? 'hands' : cfg.track === 'feet' ? 'feet' : 'points'} on grid`
+      : '';
+  }
+
+  if (!navigator.mediaDevices?.getUserMedia) setStatus('This browser cannot use a camera here. Open the file in Chrome or Edge.', 'bad');
+  else setStatus('Ready. Start with step 1 or 2.');
+  requestAnimationFrame(loop);
+
+  // Expose a tiny hook for automated checks
+  window.__floorGrid = { applyH, homography, cfg, G, sim, step, pointsOf };
+}
+</script>
+</body>
+</html>
