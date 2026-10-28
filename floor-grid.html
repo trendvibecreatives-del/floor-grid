@@ -185,7 +185,7 @@
 const IS_PROJ = new URLSearchParams(location.search).get('view') === 'projector';
 // Bump on every release. The projector reloads itself when the control page
 // runs a different version, so the two windows never get out of step.
-const APP_VERSION = '2026-10-28.7';
+const APP_VERSION = '2026-10-28.9';
 
 // Where the grid sits inside a W x H screen. A HUD band sits on top.
 function layout(W, H, s) {
@@ -371,10 +371,12 @@ function drawMeteorScene(ctx, L, sc) {
       ctx.strokeText(f.text, x, y - p * gh * 0.1);
       ctx.fillStyle = f.bad ? '#fca5a5' : '#fde68a'; ctx.fillText(f.text, x, y - p * gh * 0.1);
       ctx.globalAlpha = 1;
-    } else if (f.k === 'miss' && f.age < 450) {
-      const p = f.age / 450;
-      ctx.strokeStyle = `rgba(255,255,255,${1 - p})`; ctx.lineWidth = Math.max(2, gh * 0.006);
-      ctx.beginPath(); ctx.arc(x, y, gh * 0.03 * (1 + p), 0, Math.PI * 2); ctx.stroke();
+    } else if (f.k === 'miss' && f.age < 700) {
+      // Where the ball was seen but nothing was hit: ring + cross, so players see it was detected
+      const p = f.age / 700, R = gh * 0.05 * (1 + 0.6 * p);
+      ctx.strokeStyle = `rgba(255,255,255,${1 - p})`; ctx.lineWidth = Math.max(3, gh * 0.008);
+      ctx.beginPath(); ctx.arc(x, y, R, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x - R * 0.5, y); ctx.lineTo(x + R * 0.5, y); ctx.moveTo(x, y - R * 0.5); ctx.lineTo(x, y + R * 0.5); ctx.stroke();
     }
   }
 
@@ -1083,7 +1085,7 @@ function startControl() {
 
       // Shots
       for (const s of shots) {
-        const tol = s.src === 'touch' ? 0.02 : s.src === 'ball' ? 0.08 : 0.04;
+        const tol = s.src === 'touch' ? 0.02 : s.src === 'ball' ? 0.14 : 0.04;   // generous for balls
         let best = null, bestD = Infinity, bestPose = null;
         for (const m of M.asteroids) {
           const pose = astPose(m, Math.min(1, (now - m.t0) / m.life));
@@ -1371,38 +1373,64 @@ function startControl() {
 
   // ---------- Projection model ----------
   // A tiny copy of what the projector is showing. Where it just changed
-  // (a meteor moved, a target appeared), the camera will see motion too,
-  // so the ball detector ignores those spots for a moment.
-  const MW = 128, MH = 72, PROJ_LAG = 380;
+  // (an asteroid grew, a target appeared), the camera sees motion too.
+  // For each spot we remember HOW MUCH it changed recently; camera motion
+  // there only counts if it's clearly bigger than that. So a sharp moving
+  // edge is ignored, but a ball flying over a slowly growing asteroid still
+  // counts.
+  // A change is remembered at full strength for HOLD ms (the camera shows
+  // the projector's picture late), then fades with HALF_LIFE.
+  const MW = 128, MH = 72, PROJ_LAG = 380, HOLD = 320, HALF_LIFE = 120;
   const modelCv = document.createElement('canvas');
   modelCv.width = MW; modelCv.height = MH;
   const modelCtx = modelCv.getContext('2d', { willReadFrequently: true });
-  let prevModel = null, recentMask = null, modelIdx = null;
-  const lastChange = new Float64Array(MW * MH);
+  let recentMask = null, modelIdx = null;
+  const pastModels = [];   // recent copies of the picture, newest last: {t, d}
+  const mag = new Float32Array(MW * MH), magT = new Float64Array(MW * MH);
   function updateProjectionModel(snap, now) {
     render(modelCtx, MW, MH, { ...snap, hud: { ...snap.hud, left: '', right: '' } }, now);
     const d = modelCtx.getImageData(0, 0, MW, MH).data;
+    // A camera picture can span several projector frames (slow cameras), so
+    // compare with every copy from the last ~170 ms, not just the previous one.
+    while (pastModels.length && now - pastModels[0].t > 170) pastModels.shift();
+    const prevPrev = pastModels.length ? pastModels[pastModels.length - 1].d : null;
     let changed = 0;
-    if (prevModel) {
-      for (let m = 0, j = 0; m < MW * MH; m++, j += 4) {
-        const c = Math.max(Math.abs(d[j] - prevModel[j]), Math.abs(d[j + 1] - prevModel[j + 1]), Math.abs(d[j + 2] - prevModel[j + 2]));
-        if (c > 6) { lastChange[m] = now; changed++; }
+    for (let m = 0, j = 0; m < MW * MH; m++, j += 4) {
+      let c = 0;
+      for (const pm of pastModels) {
+        const p = pm.d;
+        const cc = Math.max(Math.abs(d[j] - p[j]), Math.abs(d[j + 1] - p[j + 1]), Math.abs(d[j + 2] - p[j + 2]));
+        if (cc > c) c = cc;
       }
+      if (prevPrev && Math.max(Math.abs(d[j] - prevPrev[j]), Math.abs(d[j + 1] - prevPrev[j + 1]), Math.abs(d[j + 2] - prevPrev[j + 2])) > 6) changed++;
+      const age = now - magT[m];
+      const cur = age < HOLD ? mag[m] : mag[m] * Math.pow(0.5, (age - HOLD) / HALF_LIFE);
+      if (c >= cur) { mag[m] = c; magT[m] = now; }
     }
-    prevModel = d;
-    // Most of the picture changed (banner, flash): ignore everything briefly
-    if (changed > MW * MH * 0.25) suppressUntil = Math.max(suppressUntil, now + PROJ_LAG);
-    // Recently changed spots, grown by 2 pixels to cover calibration error
-    const rm = new Uint8Array(MW * MH);
+    pastModels.push({ t: now, d });
+    // Current remembered value of every spot
+    const held = new Float32Array(MW * MH);
+    for (let m = 0; m < MW * MH; m++) {
+      const age = now - magT[m];
+      held[m] = age < HOLD ? mag[m] : mag[m] * Math.pow(0.5, (age - HOLD) / HALF_LIFE);
+    }
+    // Nearly the whole picture changed (full-screen flash): ignore everything briefly.
+    // Smaller changes are handled spot by spot below.
+    if (changed > MW * MH * 0.6) suppressUntil = Math.max(suppressUntil, now + PROJ_LAG);
+    // Spread each value 2 pixels around to cover calibration error
+    const ex = new Float32Array(MW * MH);
     for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) {
-      if (now - lastChange[y * MW + x] >= PROJ_LAG) continue;
+      const v = held[y * MW + x];
+      if (v < 2) continue;
       for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
         const yy = y + dy, xx = x + dx;
-        if (yy >= 0 && yy < MH && xx >= 0 && xx < MW) rm[yy * MW + xx] = 1;
+        if (yy >= 0 && yy < MH && xx >= 0 && xx < MW && ex[yy * MW + xx] < v) ex[yy * MW + xx] = v;
       }
     }
-    recentMask = rm;
+    recentMask = ex;
   }
+  // How much of the camera's change at pixel i the projector itself explains
+  const explained = i => (recentMask && modelIdx[i] >= 0 ? recentMask[modelIdx[i]] : 0);
 
   function buildMaps() {
     gridMap = new Int16Array(BW * bH).fill(-1);
@@ -1462,14 +1490,19 @@ function startControl() {
     noiseEma = noiseEma ? noiseEma * 0.95 + noise * 0.05 : noise;
     thrNow = cfg.ballAuto ? Math.max(8, Math.min(60, Math.round(noiseEma * 5 + 6))) : cfg.ballSens;
 
-    const projMasked = i => i >= 0 && i < gray.length && recentMask && modelIdx[i] >= 0 && recentMask[modelIdx[i]] === 1;
+    const projMasked = i => i >= 0 && i < gray.length && explained(i) > 30;
     let count = 0, sx = 0, sy = 0, edge = false, byPerson = false, byProj = false;
     const pts = cfg.showMotion ? [] : null;
+    const allPx = [];
     for (let i = 0; i < gray.length; i++) {
       if (gridMap[i] < 0 || mask[i]) continue;
-      if (recentMask && recentMask[modelIdx[i]]) continue;   // projected picture changed here
-      if (change(i) > thrNow) {
+      const ch = change(i);
+      // Count it only if it's bigger than what the projector's own changes explain
+      // (with a safety margin: the camera sees sharper detail than our small copy)
+      if (ch > thrNow && ch > explained(i) * 1.5 + 10) {
         count++; sx += i % BW; sy += (i / BW) | 0;
+        if (window.__fgDebug && window.__fgDebug.length < 400) window.__fgDebug.push({ x: i % BW, y: (i / BW) | 0, ch, ex: Math.round(explained(i)), thr: thrNow });
+        allPx.push(i);
         // Blob cut off by the grid edge or a person = only part of the ball is visible
         if (edgeMap[i]) edge = true;
         if (mask[i - 1] || mask[i + 1] || mask[i - BW] || mask[i + BW]) { edge = true; byPerson = true; }
@@ -1492,7 +1525,7 @@ function startControl() {
     if (count > 0 && count < cfg.ballMin && !ev) ballInfo = { t: now, text: `Tiny motion only (${count} px). If that was the ball, lower "Smallest ball".` };
     if (count >= cfg.ballMin) {
       ev ||= { start: now, frames: [] };
-      ev.frames.push({ count, x: sx / count, y: sy / count, edge, byPerson, byProj, mask: recentMask });
+      ev.frames.push({ count, x: sx / count, y: sy / count, edge, byPerson, byProj, mask: recentMask, px: allPx });
       ev.last = now;
     }
     if (ev && (now - ev.last > 100 || now - ev.start > 700)) {
@@ -1516,10 +1549,40 @@ function startControl() {
         ballCooldown = now + 450;   // also skip the bounce coming back out
         ev = null; return;
       }
-      // The ball vanished into a spot where the picture is moving (e.g. a
-      // meteor): follow its direction into that spot and aim at the middle.
-      let px = best.x, py = best.y;
-      if (best.byProj && best.mask) {
+      // Main rule: the ball flies at the wall, hits it and bounces back, so the
+      // impact is where its path turns around. Real cameras smear a fast ball
+      // into a streak, so use the FRONT tip of the streak in that frame.
+      // (frames cut off by the grid edge or a player are skipped: their centre is off)
+      const fr = ev.frames.filter(f => !f.edge);
+      let turn = -1, sharpest = 1, sharpK = -1;
+      for (let k = 1; k < fr.length - 1; k++) {
+        const ax = fr[k].x - fr[k - 1].x, ay = fr[k].y - fr[k - 1].y;
+        const bx = fr[k + 1].x - fr[k].x, by = fr[k + 1].y - fr[k].y;
+        const la = Math.hypot(ax, ay), lb = Math.hypot(bx, by);
+        if (la < 1.5 || lb < 1.5) continue;
+        const cos = (ax * bx + ay * by) / (la * lb);
+        if (cos < 0.57) { turn = k; break; }          // path bent by 55°+ = the bounce
+        if (cos < sharpest) { sharpest = cos; sharpK = k; }
+      }
+      if (turn < 0 && sharpest < 0.85) turn = sharpK;  // gentler bend: still the best guess
+      const tipOf = (f, dx, dy) => {
+        let mx = -Infinity;
+        const proj = f.px.map(i => { const p = (i % BW) * dx + ((i / BW) | 0) * dy; if (p > mx) mx = p; return p; });
+        const span = Math.max(2, mx - Math.min(...proj));
+        let tx = 0, ty = 0, n = 0;
+        f.px.forEach((i, k) => { if (proj[k] >= mx - span * 0.3) { tx += i % BW; ty += (i / BW) | 0; n++; } });
+        return n ? [tx / n, ty / n] : [f.x, f.y];
+      };
+      let px = best.x, py = best.y, usedTurn = false;
+      if (turn > 0 && !fr[turn].byPerson) {
+        let dx = fr[turn].x - fr[turn - 1].x, dy = fr[turn].y - fr[turn - 1].y;
+        const l = Math.hypot(dx, dy) || 1; dx /= l; dy /= l;
+        [px, py] = tipOf(fr[turn], dx, dy);
+        usedTurn = true;
+      }
+      // Otherwise, if the ball vanished into a spot where the picture is moving
+      // (an asteroid): follow its direction into that spot and aim at the middle.
+      if (!usedTurn && best.byProj && best.mask) {
         const pf = ev.frames[bi - 1];
         let dx = 0, dy = -1;
         if (pf) { dx = best.x - pf.x; dy = best.y - pf.y; const l = Math.hypot(dx, dy) || 1; dx /= l; dy /= l; }
@@ -1527,7 +1590,7 @@ function startControl() {
         for (; k <= 16; k++) {
           const x = Math.round(best.x + dx * k), y = Math.round(best.y + dy * k);
           if (x < 0 || y < 0 || x >= BW || y >= bH) break;
-          const i = y * BW + x, m = modelIdx[i] >= 0 && best.mask[modelIdx[i]] === 1;
+          const i = y * BW + x, m = modelIdx[i] >= 0 && best.mask[modelIdx[i]] > 30;
           if (m && inStart < 0) inStart = k;
           if (!m && inStart >= 0) { inEnd = k; break; }
         }
