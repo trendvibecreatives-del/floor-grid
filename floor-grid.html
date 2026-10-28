@@ -155,6 +155,11 @@
           <button id="start">Start</button>
           <button id="stop" class="ghost">Stop</button>
         </div>
+        <div class="row" id="tttLevelRow" style="margin-top:8px" hidden>
+          <label for="tttLevel" style="color:var(--muted)">Level</label>
+          <select id="tttLevel" style="flex:1;min-width:0"></select>
+          <button id="undo" class="ghost" type="button" title="Take back the last move (e.g. a ball counted twice)">Undo last move</button>
+        </div>
         <p class="hint" id="modeHint"></p>
       </div>
 
@@ -204,7 +209,7 @@
 const IS_PROJ = new URLSearchParams(location.search).get('view') === 'projector';
 // Bump on every release. The projector reloads itself when the control page
 // runs a different version, so the two windows never get out of step.
-const APP_VERSION = '2026-10-28.10';
+const APP_VERSION = '2026-10-28.11';
 
 // Where the grid sits inside a W x H screen. A HUD band sits on top.
 function layout(W, H, s) {
@@ -237,6 +242,8 @@ function tileColor(k, now, still) {
     case 'lava':   return '#ef4444';
     case 'p1':     return '#ef4444';
     case 'p2':     return '#3b82f6';
+    case 'p1win':  return '#ffb4b4';   // winning line: brighter
+    case 'p2win':  return '#bfdbfe';
     // Ball mode lights the wall up so the camera can see the ball against it
     default:       return still ? '#6b7a99' : '#0d1117';
   }
@@ -445,6 +452,13 @@ function render(ctx, W, H, s, now) {
         ctx.stroke();
       }
     }
+  }
+
+  // Whose turn it is (tic-tac-toe): a thick frame in the team's colour
+  if (s.turnColor) {
+    const lw = Math.max(6, t * 0.07);
+    ctx.lineWidth = lw; ctx.strokeStyle = s.turnColor;
+    ctx.strokeRect(L.gx + lw / 2, L.gy + lw / 2, L.gw - lw, L.gh - lw);
   }
 
   if (s.hitFlash) { ctx.fillStyle = 'rgba(239,68,68,.35)'; ctx.fillRect(0, 0, W, H); }
@@ -1011,7 +1025,7 @@ function startControl() {
   window.addEventListener('message', e => { if (projWin && e.source === projWin) fromProjector(e.data); });
 
   const pv = $('preview');
-  const pvTile = e => { const r = pv.getBoundingClientRect(); return tileAt(e.clientX - r.left, e.clientY - r.top, r.width, r.height, cfg); };
+  const pvTile = e => { const r = pv.getBoundingClientRect(); return tileAt(e.clientX - r.left, e.clientY - r.top, r.width, r.height, { margin: cfg.margin, ...GR() }); };
   pv.addEventListener('pointerdown', e => {
     try { pv.setPointerCapture(e.pointerId); } catch {}
     simPress('v' + e.pointerId, pvTile(e));
@@ -1026,7 +1040,10 @@ function startControl() {
   // ---------- Games ----------
   const G = { mode: 'test', phase: 'play', tiles: [], score: 0, lives: 3, start: 0, end: 0,
               goAt: 0, lastCount: 0, nextSpawn: 0, invuln: 0, flashUntil: 0, msg: '' };
-  const n = () => cfg.rows * cfg.cols;
+  // Board size: a game can use its own size (bigger tic-tac-toe levels);
+  // otherwise the Rows/Columns from Settings.
+  function GR() { return G.gridOverride || { rows: cfg.rows, cols: cfg.cols }; }
+  const n = () => GR().rows * GR().cols;
   const clearTiles = () => { G.tiles = Array.from({ length: n() }, () => ({ k: '', until: 0 })); };
   clearTiles();
 
@@ -1034,20 +1051,46 @@ function startControl() {
     test: 'Tiles light up while someone touches or stands on them. Use this to check tracking.',
     hits: 'Hit the pulsing green tile as fast as you can.',
     lava: 'Yellow blinking = about to turn to lava. Stay off it before it turns red. 3 lives. (Not for ball mode.)',
-    ttt: 'Red and Blue take turns. Hit an empty tile to claim it. Three in a row wins. Great with balls.',
+    ttt: 'Red and Blue take turns. Hit an empty tile to claim it. Get a line across, down or diagonal to win. Pick a level: bigger boards and longer lines are harder, and from level 3 each turn has a time limit. Great with balls.',
     meteor: 'Asteroids fly toward you and grow bigger. Hit them before they arrive or they crash and break your shield! Hit early = more points. Gray armored ones need 2 hits. Golden comets repair the shield.',
   };
-  const showHint = () => { $('modeHint').textContent = HINTS[$('mode').value]; };
+  // Tic-tac-toe levels: bigger boards (smaller tiles = harder to aim) and longer lines
+  const TTT_LEVELS = [
+    { rows: 3, cols: 3, need: 3, turnSec: 0,  name: 'Level 1 · 3×3 · 3 in a row' },
+    { rows: 4, cols: 4, need: 3, turnSec: 0,  name: 'Level 2 · 4×4 · 3 in a row' },
+    { rows: 4, cols: 6, need: 4, turnSec: 15, name: 'Level 3 · 4×6 · 4 in a row · 15 s turns' },
+    { rows: 5, cols: 7, need: 4, turnSec: 12, name: 'Level 4 · 5×7 · 4 in a row · 12 s turns' },
+    { rows: 6, cols: 8, need: 5, turnSec: 10, name: 'Level 5 · 6×8 · 5 in a row · 10 s turns' },
+  ];
+  TTT_LEVELS.forEach((l, i) => $('tttLevel').add(new Option(l.name, i)));
+  $('tttLevel').value = String(Math.min(TTT_LEVELS.length - 1, store.get('tttLevel', 0)));
+  $('tttLevel').onchange = () => { store.set('tttLevel', +$('tttLevel').value); if (G.mode === 'ttt') startGame(); };
+
+  const showHint = () => {
+    const m = $('mode').value;
+    $('modeHint').textContent = HINTS[m];
+    $('tttLevelRow').hidden = m !== 'ttt';
+  };
   $('mode').onchange = () => { showHint(); if ($('mode').value === 'test') startGame(); };
   showHint();
 
   function startGame() {
     const now = performance.now();
-    clearTiles();
     G.mode = $('mode').value;
+    G.gridOverride = null;
+    if (G.mode === 'ttt') {
+      const L = TTT_LEVELS[+$('tttLevel').value] || TTT_LEVELS[0];
+      G.ttt = L;
+      G.gridOverride = { rows: L.rows, cols: L.cols };
+    }
+    clearTiles();
     G.score = 0; G.lives = 3; G.invuln = 0; G.flashUntil = 0; G.msg = '';
     if (G.mode === 'test') { G.phase = 'play'; return; }
-    if (G.mode === 'ttt') { G.phase = 'play'; G.turn = 'p1'; play('go'); return; }
+    if (G.mode === 'ttt') {
+      G.phase = 'play'; G.turn = 'p1'; G.winCells = null; G.history = []; G.lockUntil = 0;
+      G.turnEnds = G.ttt.turnSec ? now + G.ttt.turnSec * 1000 : 0;
+      play('go'); return;
+    }
     G.phase = 'countdown'; G.goAt = now + 3000; G.lastCount = 4;
     G.lastHurry = 0;
     if (G.mode === 'meteor') {
@@ -1057,12 +1100,27 @@ function startControl() {
     if (cfg.sound) try { audio(); } catch {}
   }
   function stopGame() {
+    G.gridOverride = null;
     clearTiles();
     G.mode = 'test'; G.phase = 'play'; G.msg = '';
     $('mode').value = 'test'; showHint();
   }
   $('start').onclick = startGame;
   $('stop').onclick = stopGame;
+
+  // Tic-tac-toe: take back the last move (wrong tile, or a ball that counted twice)
+  $('undo').onclick = () => {
+    if (G.mode !== 'ttt' || !G.history || !G.history.length) return;
+    const now = performance.now();
+    const last = G.history.pop();
+    G.tiles.forEach(t => { if (t.k.endsWith('win')) t.k = t.k.slice(0, 2); });   // un-highlight a win
+    G.tiles[last.i].k = '';
+    G.turn = last.turn;
+    G.phase = 'play'; G.winCells = null; G.msg = ''; G.overMsg = '';
+    G.turnEnds = G.ttt && G.ttt.turnSec ? now + G.ttt.turnSec * 1000 : 0;
+    G.lockUntil = now + 800;
+    play('miss');
+  };
 
   const randFree = (pressed, kinds = ['']) => {
     const free = [];
@@ -1215,18 +1273,47 @@ function startControl() {
 
     if (G.mode === 'ttt') {
       const TEAM = { p1: 'Red', p2: 'Blue' };
+      const L = G.ttt || TTT_LEVELS[0];
+      const nextTurn = () => {
+        G.turn = G.turn === 'p1' ? 'p2' : 'p1';
+        G.turnEnds = L.turnSec ? now + L.turnSec * 1000 : 0;
+        G.lastTick = 0;
+      };
       if (G.phase === 'play') {
         for (const i of edges) {
+          // One move per throw: after a move, ignore hits for a moment, so a
+          // bouncing ball (or a second hand) can't also make the next team's move
+          if (now < (G.lockUntil || 0)) break;
           if (G.tiles[i].k) continue;
           G.tiles[i].k = G.turn;
+          G.history.push({ i, turn: G.turn });
+          G.lockUntil = now + 1500;
           play('claim', G.turn);
-          if (tttWinner(G.turn)) { G.phase = 'over'; G.overMsg = `${TEAM[G.turn]} wins!\npress Start to play again`; play('win'); break; }
-          if (G.tiles.every(t => t.k)) { G.phase = 'over'; G.overMsg = 'Draw!\npress Start to play again'; play('draw'); break; }
-          G.turn = G.turn === 'p1' ? 'p2' : 'p1';
+          const line = tttWinner(G.turn, L.need);
+          if (line) {
+            G.phase = 'over'; G.overAt = now; G.winCells = line;
+            line.forEach(c => { G.tiles[c].k = G.turn + 'win'; });
+            G.overMsg = `${TEAM[G.turn]} wins!\npress Start to play again`;
+            play('win'); break;
+          }
+          if (G.tiles.every(t => t.k)) { G.phase = 'over'; G.overAt = now; G.overMsg = 'Draw!\npress Start to play again'; play('draw'); break; }
+          nextTurn();
+          break;   // only one move per frame
+        }
+        // Turn timer (level 3+): too slow = the other team's turn
+        if (G.phase === 'play' && G.turnEnds) {
+          const left = Math.ceil((G.turnEnds - now) / 1000);
+          if (left <= 3 && left > 0 && left !== G.lastTick) { G.lastTick = left; play('hurry'); }
+          if (now >= G.turnEnds) { play('miss'); nextTurn(); }
         }
       }
-      if (G.phase === 'over') G.msg = G.overMsg;
-      return { left: 'Tic-tac-toe', right: G.phase === 'play' ? `${TEAM[G.turn]}'s turn` : '' };
+      // Let players see the winning line light up before the message covers the board
+      if (G.phase === 'over' && now - G.overAt > 1500) G.msg = G.overMsg;
+      const timer = G.phase === 'play' && G.turnEnds ? ` · ${Math.max(0, Math.ceil((G.turnEnds - now) / 1000))}s` : '';
+      return {
+        left: `Tic-tac-toe · L${TTT_LEVELS.indexOf(L) + 1} · ${L.need} in a row`,
+        right: G.phase === 'play' ? `${TEAM[G.turn]}'s turn${timer}` : '',
+      };
     }
 
     if (G.mode === 'test') {
@@ -1299,18 +1386,18 @@ function startControl() {
       : '♥'.repeat(Math.max(0, G.lives));
     return hud;
   }
-  // Three in a row (or the full line on grids smaller than 3)
-  function tttWinner(team) {
-    const R = cfg.rows, C = cfg.cols, L = Math.min(3, R, C);
+  // `need` in a row (across, down or diagonal). Returns the winning tiles, or null.
+  function tttWinner(team, need = 3) {
+    const R = GR().rows, C = GR().cols, L = Math.min(need, R, C);
     const at = (r, c) => r >= 0 && r < R && c >= 0 && c < C && G.tiles[r * C + c].k === team;
     for (let r = 0; r < R; r++) for (let c = 0; c < C; c++) {
       for (const [dr, dc] of [[0, 1], [1, 0], [1, 1], [1, -1]]) {
         let k = 0;
         while (k < L && at(r + dr * k, c + dc * k)) k++;
-        if (k === L) return true;
+        if (k === L) return Array.from({ length: L }, (_, j) => (r + dr * j) * C + (c + dc * j));
       }
     }
-    return false;
+    return null;
   }
 
   function endGame(line) {
@@ -1335,8 +1422,8 @@ function startControl() {
       cctx.strokeStyle = 'rgba(34,211,238,.9)';
       cctx.lineWidth = 2 * k;
       cctx.beginPath();
-      for (let c = 0; c <= cfg.cols; c++) { cctx.moveTo(...P(c / cfg.cols, 0)); cctx.lineTo(...P(c / cfg.cols, 1)); }
-      for (let r = 0; r <= cfg.rows; r++) { cctx.moveTo(...P(0, r / cfg.rows)); cctx.lineTo(...P(1, r / cfg.rows)); }
+      for (let c = 0; c <= GR().cols; c++) { cctx.moveTo(...P(c / GR().cols, 0)); cctx.lineTo(...P(c / GR().cols, 1)); }
+      for (let r = 0; r <= GR().rows; r++) { cctx.moveTo(...P(0, r / GR().rows)); cctx.lineTo(...P(1, r / GR().rows)); }
       cctx.stroke();
     }
     const pts = calibrating ? newPts : [];
@@ -1491,7 +1578,7 @@ function startControl() {
     for (let y = 0; y < bH; y++) for (let x = 0; x < BW; x++) {
       const { u, v } = applyH(H, (x + 0.5) / BW, (y + 0.5) / bH);
       if (u >= 0 && u < 1 && v >= 0 && v < 1) {
-        gridMap[y * BW + x] = Math.floor(v * cfg.rows) * cfg.cols + Math.floor(u * cfg.cols);
+        gridMap[y * BW + x] = Math.floor(v * GR().rows) * GR().cols + Math.floor(u * GR().cols);
         const mx = Math.min(MW - 1, Math.floor(ML.gx + u * ML.gw)), my = Math.min(MH - 1, Math.floor(ML.gy + v * ML.gh));
         modelIdx[y * BW + x] = my * MW + mx;
       }
@@ -1520,7 +1607,7 @@ function startControl() {
   // `frame` is 1 value per pixel (gray) or 3 (RGB). The change at a pixel is
   // the biggest change in any color channel.
   function processGray(now, frame) {
-    const key = `${bH}|${cfg.rows}|${cfg.cols}|${cfg.margin}|${calibPts}`;
+    const key = `${bH}|${GR().rows}|${GR().cols}|${cfg.margin}|${calibPts}`;
     if (key !== mapKey) { mapKey = key; buildMaps(); }
     const last = prevGray;
     prevGray = frame;
@@ -1654,7 +1741,7 @@ function startControl() {
       const cx = (px + 0.5) / BW, cy = (py + 0.5) / bH;
       const { u, v } = applyH(H, cx, cy);
       if (u >= 0 && u < 1 && v >= 0 && v < 1) {
-        const tile = Math.floor(v * cfg.rows) * cfg.cols + Math.floor(u * cfg.cols);
+        const tile = Math.floor(v * GR().rows) * GR().cols + Math.floor(u * GR().cols);
         ballHits.push(tile);
         shots.push({ u, v, src: 'ball' });
         lastBallHit = { x: cx, y: cy, t: now };
@@ -1723,7 +1810,7 @@ function startControl() {
           if (u >= 0 && u < 1 && v >= 0 && v < 1) {
             on = true;
             gridFeet.push({ u, v });
-            onTiles.add(Math.floor(v * cfg.rows) * cfg.cols + Math.floor(u * cfg.cols));
+            onTiles.add(Math.floor(v * GR().rows) * GR().cols + Math.floor(u * GR().cols));
           }
         }
         camFeet.push({ ...f, on });
@@ -1752,13 +1839,14 @@ function startControl() {
     hud.msg = G.msg;
 
     const snap = {
-      rows: cfg.rows, cols: cfg.cols, margin: cfg.margin,
+      rows: GR().rows, cols: GR().cols, margin: cfg.margin,
       tiles: G.tiles.map(t => t.k), pressed, hud,
       calibrating, calibNext: newPts.length,
       feet: cfg.showFeet ? gridFeet : [],
       hitFlash: now < G.flashUntil,
       still: ballMode,
       scene: G.mode === 'meteor' ? meteorScene(now) : null,
+      turnColor: G.mode === 'ttt' && G.phase === 'play' ? (G.turn === 'p1' ? '#ef4444' : '#3b82f6') : null,
       v: APP_VERSION,
     };
 

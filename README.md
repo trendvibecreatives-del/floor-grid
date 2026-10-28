@@ -20,7 +20,8 @@ if available, or opens `floor-grid.html` directly.
 - **Test tiles** – a tile lights up while it's touched. Use this to check tracking.
 - **Hit the lights** – hit the pulsing green tile as fast as you can.
 - **Lava floor** – stay off tiles that turn red. 3 lives.
-- **Tic-tac-toe (2 teams)** – Red and Blue take turns claiming tiles. Three in a row wins.
+- **Tic-tac-toe (2 teams)** – Red and Blue take turns claiming tiles. 5 levels, from 3×3 (3 in a row) up to
+  6×8 (5 in a row) with turn timers. A coloured frame shows whose turn it is; "Undo last move" fixes mistakes.
 - **Asteroid Attack** - asteroids fly toward you and grow. Hit them with balls before they crash
   into the screen. Armored rocks need 2 hits, golden comets repair the shield, combos up to x4.
 
