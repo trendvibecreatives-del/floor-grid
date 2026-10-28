@@ -183,6 +183,9 @@
 // Shared: layout + drawing (used by both the preview and projector)
 // ======================================================================
 const IS_PROJ = new URLSearchParams(location.search).get('view') === 'projector';
+// Bump on every release. The projector reloads itself when the control page
+// runs a different version, so the two windows never get out of step.
+const APP_VERSION = '2026-10-28.7';
 
 // Where the grid sits inside a W x H screen. A HUD band sits on top.
 function layout(W, H, s) {
@@ -507,8 +510,25 @@ function startProjector() {
   // Two ways to talk to the control page: a same-site channel (works even if
   // either page was refreshed or opened by hand) and the opener window link.
   const bc = 'BroadcastChannel' in window ? new BroadcastChannel('floorgrid') : null;
+  let reloading = false;
   const onState = d => {
     if (!d || d.type !== 'state') return;
+    // Control page runs a different version: reload this window, skipping the browser cache
+    if (d.s && d.s.v && d.s.v !== APP_VERSION && !reloading) {
+      // Already reloaded for this version and still different: the control
+      // page is the outdated one, so don't reload again.
+      if (new URLSearchParams(location.search).get('v') === d.s.v) {
+        msg.textContent = 'Versions differ: press Ctrl+F5 on the control page (laptop)';
+        bar.hidden = false;
+        state = d.s; lastMsg = performance.now();
+        return;
+      }
+      reloading = true;
+      msg.textContent = 'Updating projector…';
+      bar.hidden = false;
+      location.replace(location.pathname + '?view=projector&v=' + encodeURIComponent(d.s.v));
+      return;
+    }
     state = d.s;
     lastMsg = performance.now();
   };
@@ -549,12 +569,21 @@ function startProjector() {
   cv.addEventListener('pointercancel', up);
 
   (function frame() {
-    const { ctx, W, H } = fitCanvas(cv);
-    render(ctx, W, H, state, performance.now());
+    if (reloading) return;
+    let problem = '';
+    try {
+      const { ctx, W, H } = fitCanvas(cv);
+      render(ctx, W, H, state, performance.now());
+    } catch (e) {
+      problem = 'Projector error: ' + (e.message || e) + ' (press Ctrl+F5 here)';
+    }
     send({ type: 'tick' });
-    msg.textContent = performance.now() - lastMsg < 1500
-      ? 'Connected'
-      : 'Waiting for control page… (keep it open in this browser)';
+    const connected = performance.now() - lastMsg < 1500;
+    const mismatch = state && state.v && state.v !== APP_VERSION;
+    msg.textContent = problem || (mismatch ? 'Versions differ: press Ctrl+F5 on the control page (laptop)'
+      : connected ? 'Connected' : 'Waiting for control page… (keep it open in this browser)');
+    // Show the status bar over fullscreen too when something is wrong
+    bar.hidden = !!document.fullscreenElement && connected && !problem && !mismatch;
     requestAnimationFrame(frame);
   })();
 }
@@ -1615,6 +1644,7 @@ function startControl() {
       hitFlash: now < G.flashUntil,
       still: ballMode,
       scene: G.mode === 'meteor' ? meteorScene(now) : null,
+      v: APP_VERSION,
     };
 
     // The camera sees changes in the projected picture as motion, so tell the
