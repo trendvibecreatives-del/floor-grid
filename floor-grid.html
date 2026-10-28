@@ -145,19 +145,29 @@
       <div class="card">
         <h2>4. Play</h2>
         <div class="row">
-          <select id="mode" style="flex:1">
+          <select id="mode" style="flex:1;min-width:0">
             <option value="test">Test tiles</option>
-            <option value="hits">Hit the lights</option>
-            <option value="lava">Lava floor</option>
-            <option value="ttt">Tic-tac-toe (2 teams)</option>
-            <option value="meteor">Asteroid Attack ☄</option>
+            <optgroup label="Action">
+              <option value="meteor">Asteroid Attack ☄</option>
+              <option value="hits">Hit the lights</option>
+              <option value="lava">Lava floor</option>
+            </optgroup>
+            <optgroup label="Kids &amp; learning">
+              <option value="math">Math Balloons (kids) 🎈</option>
+              <option value="pattern">What Comes Next? (patterns)</option>
+            </optgroup>
+            <optgroup label="Logic &amp; memory">
+              <option value="memory">Memory Match</option>
+              <option value="echo">Echo (repeat the pattern)</option>
+              <option value="ttt">Tic-tac-toe (2 teams)</option>
+            </optgroup>
           </select>
           <button id="start">Start</button>
           <button id="stop" class="ghost">Stop</button>
         </div>
-        <div class="row" id="tttLevelRow" style="margin-top:8px" hidden>
-          <label for="tttLevel" style="color:var(--muted)">Level</label>
-          <select id="tttLevel" style="flex:1;min-width:0"></select>
+        <div class="row" id="levelRow" style="margin-top:8px" hidden>
+          <label for="level" style="color:var(--muted)">Level</label>
+          <select id="level" style="flex:1;min-width:0"></select>
           <button id="undo" class="ghost" type="button" title="Take back the last move (e.g. a ball counted twice)">Undo last move</button>
         </div>
         <p class="hint" id="modeHint"></p>
@@ -176,6 +186,8 @@
           <label for="sound">Sound effects</label><input id="sound" type="checkbox">
           <label for="volume">Volume</label><input id="volume" type="range" min="0" max="1" step="0.05" style="width:110px">
           <span></span><button id="testSound" class="ghost" type="button">Test sound</button>
+          <label for="speak">Read questions aloud (kids games)</label><input id="speak" type="checkbox">
+          <label for="frames">Window-frames look (Asteroid Attack; lowers ball accuracy)</label><input id="frames" type="checkbox">
         </div>
         <h2 style="margin-top:16px">Ball mode</h2>
         <div class="settings" style="margin-top:0">
@@ -209,7 +221,7 @@
 const IS_PROJ = new URLSearchParams(location.search).get('view') === 'projector';
 // Bump on every release. The projector reloads itself when the control page
 // runs a different version, so the two windows never get out of step.
-const APP_VERSION = '2026-10-28.11';
+const APP_VERSION = '2026-10-29.1';
 
 // Where the grid sits inside a W x H screen. A HUD band sits on top.
 function layout(W, H, s) {
@@ -265,33 +277,207 @@ function seeded(seed) {
   return () => (x = (x * 16807) % 2147483647) / 2147483647;
 }
 
-// Asteroid Attack: deep-space sky; asteroids fly toward the player and grow.
-// Everything is drawn from the game data only (no clock), so the control
-// page's copy of the picture matches the projector's exactly.
+// ======================================================================
+// Scene art (shared by the control page, its picture copy and projector).
+// Everything is drawn only from the game data (no clock), so every copy of
+// the picture matches exactly. Heavy images are made once and cached.
+// ======================================================================
+const ART = new Map();
+function cached(key, w, h, paint) {
+  let c = ART.get(key);
+  if (!c) {
+    c = document.createElement('canvas'); c.width = w; c.height = h;
+    paint(c.getContext('2d'), w, h);
+    ART.set(key, c);
+  }
+  return c;
+}
+
+// Smooth repeatable noise, x and y from 0 to 1
+function makeNoise(seed, n = 8) {
+  const r = seeded(seed), g = Array.from({ length: (n + 1) * (n + 1) }, r);
+  return (x, y) => {
+    const fx = Math.min(n - 1e-6, Math.max(0, x * n)), fy = Math.min(n - 1e-6, Math.max(0, y * n));
+    const ix = Math.floor(fx), iy = Math.floor(fy), tx = fx - ix, ty = fy - iy;
+    const sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty);
+    const a = g[iy * (n + 1) + ix], b = g[iy * (n + 1) + ix + 1], c = g[(iy + 1) * (n + 1) + ix], d = g[(iy + 1) * (n + 1) + ix + 1];
+    return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
+  };
+}
+
+// Rounded-rectangle outline added to the current path (no beginPath)
+function addRoundRect(ctx, x, y, w, h, r) {
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+// A lit, cratered 3D-looking rock, made pixel by pixel from a height map
+function asteroidSprite(seed, armored) {
+  return cached('ast' + seed + (armored ? 'a' : ''), 160, 160, (ctx, S) => {
+    const r = seeded(seed);
+    const outline = Array.from({ length: 16 }, () => 0.78 + r() * 0.2);
+    const craters = Array.from({ length: 6 + Math.floor(r() * 6) }, () => ({ x: (r() - 0.5) * 1.4, y: (r() - 0.5) * 1.4, r: 0.08 + r() * 0.2, d: 0.5 + r() * 0.5 }));
+    const bumps = Array.from({ length: 14 }, () => ({ x: (r() - 0.5) * 1.6, y: (r() - 0.5) * 1.6, r: 0.2 + r() * 0.45, h: (r() - 0.5) * 0.5 }));
+    const n1 = makeNoise(seed + 0.1, 6), n2 = makeNoise(seed + 0.2, 20);
+    const base = armored ? [160, 168, 182] : [156, 120, 90];
+    let lx = -0.5, ly = -0.62, lz = 0.6; const ll = Math.hypot(lx, ly, lz); lx /= ll; ly /= ll; lz /= ll;
+    const hgt = (x, y) => {
+      let h = Math.sqrt(Math.max(0, 1 - x * x - y * y));
+      for (const b of bumps) { const q = ((x - b.x) ** 2 + (y - b.y) ** 2) / (b.r * b.r); if (q < 1) h += b.h * (1 - q) * (1 - q); }
+      for (const c of craters) {
+        const q = Math.hypot(x - c.x, y - c.y) / c.r;
+        if (q < 1) h -= c.d * 0.22 * (1 - q * q);
+        else if (q < 1.35) h += c.d * 0.05 * (1 - (q - 1) / 0.35);
+      }
+      return h + (n2((x + 1) / 2, (y + 1) / 2) - 0.5) * 0.06;
+    };
+    const edgeAt = a => {
+      const t = ((a / (Math.PI * 2)) % 1 + 1) % 1 * 16, i = Math.floor(t) % 16, f = t - Math.floor(t);
+      const s = f * f * (3 - 2 * f);
+      return outline[i] + (outline[(i + 1) % 16] - outline[i]) * s;
+    };
+    const img = ctx.createImageData(S, S), d = img.data, e = 0.02;
+    for (let py = 0; py < S; py++) for (let px = 0; px < S; px++) {
+      const x = (px + 0.5) / S * 2 - 1, y = (py + 0.5) / S * 2 - 1;
+      const rr = Math.hypot(x, y), er = edgeAt(Math.atan2(y, x));
+      if (rr > er + 0.02) continue;
+      const nx = x / er, ny = y / er;
+      const hx = (hgt(nx + e, ny) - hgt(nx - e, ny)) / (2 * e), hy = (hgt(nx, ny + e) - hgt(nx, ny - e)) / (2 * e);
+      let Nx = -hx, Ny = -hy, Nz = 1; const nl = Math.hypot(Nx, Ny, Nz); Nx /= nl; Ny /= nl; Nz /= nl;
+      const lam = Math.max(0, Nx * lx + Ny * ly + Nz * lz);
+      const mott = 0.8 + n1((nx + 1) / 2, (ny + 1) / 2) * 0.4;
+      const grain = 1 + (n2(((nx + 1) * 1.5) % 1, ((ny + 1) * 1.5) % 1) - 0.5) * 0.3;
+      const shade = (0.14 + 1.08 * lam) * mott * grain;
+      const a = Math.max(0, Math.min(1, (er - rr) * S / 2 + 0.5));
+      const i = (py * S + px) * 4;
+      d[i] = Math.min(255, base[0] * shade); d[i + 1] = Math.min(255, base[1] * shade); d[i + 2] = Math.min(255, base[2] * shade); d[i + 3] = 255 * a;
+    }
+    ctx.putImageData(img, 0, 0);
+  });
+}
+
+// Deep space backdrop: blue base (bright enough that balls show), nebula clouds
+function nebulaArt() {
+  return cached('nebula', 480, 270, (ctx, W, H) => {
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, '#18204c'); g.addColorStop(1, '#33468c');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    const r = seeded(0.771);
+    const tints = ['168,85,247', '236,72,153', '45,212,191', '99,102,241', '56,189,248'];
+    for (let k = 0; k < 9; k++) {
+      const x = r() * W, y = r() * H, rad = H * (0.3 + r() * 0.6), t = tints[k % tints.length];
+      const ng = ctx.createRadialGradient(x, y, 0, x, y, rad);
+      ng.addColorStop(0, `rgba(${t},${0.18 + r() * 0.2})`); ng.addColorStop(1, `rgba(${t},0)`);
+      ctx.fillStyle = ng; ctx.fillRect(0, 0, W, H);
+    }
+    for (let k = 0; k < 1400; k++) {           // faint star dust
+      ctx.fillStyle = `rgba(255,255,255,${r() * 0.18})`;
+      ctx.fillRect(r() * W, r() * H, 1, 1);
+    }
+  });
+}
+
+// A lit planet with bands and a thin atmosphere glow
+function planetArt() {
+  return cached('planet', 256, 256, (ctx, S) => {
+    const img = ctx.createImageData(S, S), d = img.data, bands = makeNoise(0.42, 12), spots = makeNoise(0.93, 9);
+    let lx = -0.6, ly = -0.45, lz = 0.66; const ll = Math.hypot(lx, ly, lz); lx /= ll; ly /= ll; lz /= ll;
+    for (let py = 0; py < S; py++) for (let px = 0; px < S; px++) {
+      const x = (px + 0.5) / S * 2 - 1, y = (py + 0.5) / S * 2 - 1, rr = x * x + y * y;
+      const i = (py * S + px) * 4;
+      if (rr > 1) {                                   // atmosphere halo
+        const a = Math.max(0, 1 - (Math.sqrt(rr) - 1) / 0.08);
+        d[i] = 120; d[i + 1] = 200; d[i + 2] = 255; d[i + 3] = 120 * a * a; continue;
+      }
+      const z = Math.sqrt(1 - rr), lam = Math.max(0, x * lx + y * ly + z * lz);
+      const b = bands(0.5, (y + 1) / 2 + (spots((x + 1) / 2, (y + 1) / 2) - 0.5) * 0.15);
+      const shade = 0.08 + 1.0 * lam;
+      d[i] = (40 + 120 * b) * shade; d[i + 1] = (110 + 90 * b) * shade; d[i + 2] = (150 + 80 * b) * shade; d[i + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+  });
+}
+
+// Fireball, smoke, rock chunks, sparks and a shockwave
+function drawExplosion(ctx, x, y, R, age, dur, seed, big) {
+  const p = age / dur;
+  if (p >= 1) return;
+  const r = seeded((seed || 0.5) * 0.7 + 0.1);
+  ctx.strokeStyle = `rgba(255,232,200,${(1 - p) * 0.55})`;
+  ctx.lineWidth = Math.max(2, R * 0.08 * (1 - p));
+  ctx.beginPath(); ctx.arc(x, y, R * (1 + (big ? 5 : 3.5) * p), 0, Math.PI * 2); ctx.stroke();
+  if (p < 0.3) {
+    const fa = 1 - p / 0.3, fr = R * (1.2 + 2 * p);
+    const g = ctx.createRadialGradient(x, y, 0, x, y, fr);
+    g.addColorStop(0, `rgba(255,255,240,${fa})`); g.addColorStop(1, 'rgba(255,220,150,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, fr, 0, Math.PI * 2); ctx.fill();
+  }
+  const puffs = big ? 14 : 10;
+  for (let k = 0; k < puffs; k++) {
+    const a = r() * Math.PI * 2, sp = 0.4 + r() * 0.9, sz = 0.45 + r() * 0.5, rise = r();
+    const dist = R * (0.15 + 1.6 * sp * Math.sqrt(p));
+    const px = x + Math.cos(a) * dist, py = y + Math.sin(a) * dist - R * rise * 0.9 * p;
+    const rad = R * sz * (0.6 + 1.4 * p);
+    const heat = Math.max(0, 1 - p * 1.7 - k * 0.02);
+    let col, al;
+    if (heat > 0) { col = `${255},${Math.round(130 + 100 * heat)},${Math.round(40 + 100 * heat * heat)}`; al = (1 - p) * 0.9; }
+    else { col = '72,66,62'; al = (1 - p) * 0.55; }
+    const g = ctx.createRadialGradient(px, py, 0, px, py, rad);
+    g.addColorStop(0, `rgba(${col},${al})`); g.addColorStop(1, `rgba(${col},0)`);
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(px, py, rad, 0, Math.PI * 2); ctx.fill();
+  }
+  const chunks = big ? 14 : 10;
+  for (let k = 0; k < chunks; k++) {
+    const a = r() * Math.PI * 2, dist = R * (0.3 + (2.5 + r() * 2) * p), s = R * (0.08 + r() * 0.1) * (1 - p * 0.5), rot = r() * 6 + p * 8;
+    ctx.save();
+    ctx.translate(x + Math.cos(a) * dist, y + Math.sin(a) * dist + R * p * p * 0.8);
+    ctx.rotate(rot);
+    ctx.globalAlpha = 1 - p;
+    ctx.fillStyle = k % 3 ? '#6b5444' : '#8a6b54';
+    ctx.beginPath(); ctx.moveTo(-s, -s * 0.6); ctx.lineTo(s * 0.8, -s); ctx.lineTo(s, s * 0.5); ctx.lineTo(-s * 0.5, s); ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+  ctx.lineCap = 'round';
+  for (let k = 0; k < 16; k++) {
+    const a = r() * Math.PI * 2, d1 = R * (0.3 + 4 * p * (0.6 + r() * 0.6)), len = R * 0.35 * (1 - p);
+    ctx.strokeStyle = `rgba(255,${200 + Math.round(r() * 50)},120,${1 - p})`;
+    ctx.lineWidth = Math.max(1, R * 0.03);
+    ctx.beginPath();
+    ctx.moveTo(x + Math.cos(a) * (d1 - len), y + Math.sin(a) * (d1 - len));
+    ctx.lineTo(x + Math.cos(a) * d1, y + Math.sin(a) * d1);
+    ctx.stroke();
+  }
+}
+
+// Asteroid Attack: asteroids fly out of deep space toward the players
 function drawMeteorScene(ctx, L, sc) {
   const { gx, gy, gw, gh } = L;
   ctx.save();
   ctx.beginPath(); ctx.rect(gx, gy, gw, gh); ctx.clip();
 
-  // Sky: mid-blue (bright enough that a thrown ball stands out), a nebula glow and stars
-  const sky = ctx.createLinearGradient(0, gy, 0, gy + gh);
-  sky.addColorStop(0, '#1a2352'); sky.addColorStop(1, '#3a4d92');
-  ctx.fillStyle = sky; ctx.fillRect(gx, gy, gw, gh);
-  const neb = ctx.createRadialGradient(gx + gw * 0.7, gy + gh * 0.35, 0, gx + gw * 0.7, gy + gh * 0.35, gh * 0.8);
-  neb.addColorStop(0, 'rgba(168,85,247,.28)'); neb.addColorStop(1, 'rgba(168,85,247,0)');
-  ctx.fillStyle = neb; ctx.fillRect(gx, gy, gw, gh);
+  ctx.drawImage(nebulaArt(), gx, gy, gw, gh);
   const sr = seeded(0.37);
-  for (let i = 0; i < 140; i++) {
-    const sz = 1 + sr() * Math.max(1, gh * 0.005);
-    ctx.fillStyle = `rgba(255,255,255,${0.4 + sr() * 0.6})`;
-    ctx.fillRect(gx + sr() * gw, gy + sr() * gh, sz, sz);
+  for (let i = 0; i < 170; i++) {
+    const x = gx + sr() * gw, y = gy + sr() * gh, big = sr() < 0.08, a = 0.35 + sr() * 0.65;
+    const sz = big ? Math.max(2, gh * 0.007) : Math.max(1, gh * 0.003 * (0.5 + sr()));
+    ctx.fillStyle = `rgba(255,255,255,${a})`;
+    ctx.fillRect(x - sz / 2, y - sz / 2, sz, sz);
+    if (big) {                                       // bright star with a little cross glint
+      ctx.strokeStyle = `rgba(200,220,255,${a * 0.6})`; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x - sz * 3, y); ctx.lineTo(x + sz * 3, y); ctx.moveTo(x, y - sz * 3); ctx.lineTo(x, y + sz * 3); ctx.stroke();
+    }
   }
+  const pr = gh * 0.45;
+  ctx.drawImage(planetArt(), gx + gw - pr * 1.3, gy + gh - pr * 0.8, pr * 2, pr * 2);
 
-  // Asteroids, smallest (farthest) first so close ones are drawn on top
-  const list = [...sc.asteroids].sort((a, b) => a.r - b.r);
+  const list = [...sc.asteroids].sort((a, b) => a.r - b.r);   // far ones first
   for (const m of list) {
     const x = gx + m.u * gw, y = gy + m.v * gh, R = m.r * gh;
-
     if (m.kind === 'comet') {
       const cg = ctx.createRadialGradient(x, y, 0, x, y, R * 1.6);
       cg.addColorStop(0, '#ffffff'); cg.addColorStop(0.35, '#fde047'); cg.addColorStop(1, 'rgba(250,204,21,0)');
@@ -299,44 +485,24 @@ function drawMeteorScene(ctx, L, sc) {
       ctx.fillStyle = '#fff7cc'; ctx.beginPath(); ctx.arc(x, y, R * 0.55, 0, Math.PI * 2); ctx.fill();
       continue;
     }
-
-    // Heat glow as it gets close
-    if (m.p > 0.45) {
+    if (m.p > 0.45) {                                // heating up as it gets close
       const a = Math.min(1, (m.p - 0.45) * 1.8);
       const hg = ctx.createRadialGradient(x, y, R * 0.8, x, y, R * 1.55);
-      hg.addColorStop(0, `rgba(255,120,40,${0.75 * a})`); hg.addColorStop(1, 'rgba(255,80,20,0)');
+      hg.addColorStop(0, `rgba(255,120,40,${0.7 * a})`); hg.addColorStop(1, 'rgba(255,80,20,0)');
       ctx.fillStyle = hg; ctx.beginPath(); ctx.arc(x, y, R * 1.55, 0, Math.PI * 2); ctx.fill();
     }
-
-    // Rock: lumpy outline, lit from the top-left
-    const rr = seeded(m.seed);
-    const pts = [];
-    for (let k = 0; k < 14; k++) {
-      const a = (k / 14) * Math.PI * 2, rad = R * (0.82 + rr() * 0.26);
-      pts.push([x + Math.cos(a) * rad, y + Math.sin(a) * rad]);
+    const spr = asteroidSprite(m.seed, m.armored);
+    const ang = m.seed * Math.PI * 2 + (m.seed < 0.5 ? -0.6 : 0.6) * m.p;   // slow tumble
+    ctx.save();
+    ctx.translate(x, y); ctx.rotate(ang);
+    ctx.drawImage(spr, -R * 1.02, -R * 1.02, R * 2.04, R * 2.04);
+    ctx.restore();
+    if (m.p > 0.6) {
+      ctx.strokeStyle = `rgba(255,140,60,${Math.min(0.9, (m.p - 0.6) * 2.2)})`;
+      ctx.lineWidth = Math.max(2, R * 0.05);
+      ctx.beginPath(); ctx.arc(x, y, R * 0.93, 0, Math.PI * 2); ctx.stroke();
     }
-    ctx.beginPath();
-    pts.forEach(([px, py], k) => (k ? ctx.lineTo(px, py) : ctx.moveTo(px, py)));
-    ctx.closePath();
-    const rock = ctx.createRadialGradient(x - R * 0.35, y - R * 0.4, R * 0.1, x, y, R * 1.1);
-    rock.addColorStop(0, m.armored ? '#d6dbe4' : '#d9c3a5');
-    rock.addColorStop(0.55, m.armored ? '#7d8796' : '#8d6f55');
-    rock.addColorStop(1, m.armored ? '#2e3540' : '#3a2a1e');
-    ctx.fillStyle = rock; ctx.fill();
-    ctx.lineWidth = Math.max(2, R * 0.06);
-    ctx.strokeStyle = m.p > 0.6 ? `rgba(255,140,60,${Math.min(1, (m.p - 0.6) * 2.5)})` : '#2a1d14';
-    ctx.stroke();
-
-    // Craters
-    for (let k = 0; k < 5; k++) {
-      const cx = x + (rr() - 0.5) * R * 1.1, cy = y + (rr() - 0.5) * R * 1.1, cr = R * (0.08 + rr() * 0.14);
-      ctx.fillStyle = 'rgba(40,28,20,.45)'; ctx.beginPath(); ctx.arc(cx, cy, cr, 0, Math.PI * 2); ctx.fill();
-      ctx.strokeStyle = 'rgba(255,240,220,.25)'; ctx.lineWidth = Math.max(1, cr * 0.25);
-      ctx.beginPath(); ctx.arc(cx, cy, cr, 0.2 * Math.PI, 0.9 * Math.PI); ctx.stroke();
-    }
-
-    // Cracks after a hit on an armored rock
-    if (m.hp < m.maxHp) {
+    if (m.hp < m.maxHp) {                            // cracked armour after the first hit
       ctx.strokeStyle = '#ffb347'; ctx.lineWidth = Math.max(2, R * 0.06);
       const cr2 = seeded(m.seed + 0.11);
       for (let k = 0; k < 4; k++) {
@@ -346,8 +512,6 @@ function drawMeteorScene(ctx, L, sc) {
         ctx.stroke();
       }
     }
-
-    // Danger ring when it's about to hit
     if (m.p > 0.7) {
       ctx.strokeStyle = `rgba(239,68,68,${Math.min(1, (m.p - 0.7) * 3.5)})`;
       ctx.lineWidth = Math.max(3, R * 0.07);
@@ -355,36 +519,21 @@ function drawMeteorScene(ctx, L, sc) {
     }
   }
 
-  // Effects
   for (const f of sc.fx) {
     const x = gx + f.u * gw, y = gy + f.v * gh;
-    if (f.k === 'boom' && f.age < 700) {
-      const p = f.age / 700, R = Math.max(f.r * gh, gh * 0.04);
-      const fb = ctx.createRadialGradient(x, y, 0, x, y, R * (1 + 1.8 * p));
-      fb.addColorStop(0, `rgba(255,255,220,${1 - p})`); fb.addColorStop(0.4, `rgba(255,170,60,${(1 - p) * 0.9})`); fb.addColorStop(1, 'rgba(255,80,20,0)');
-      ctx.fillStyle = fb; ctx.beginPath(); ctx.arc(x, y, R * (1 + 1.8 * p), 0, Math.PI * 2); ctx.fill();
-      const fr = seeded(f.seed || 0.5);
-      for (let k = 0; k < 16; k++) {
-        const a = fr() * Math.PI * 2, d = R * (0.3 + (1.5 + fr() * 2.5) * p), s2 = R * (0.12 + fr() * 0.2) * (1 - p * 0.7);
-        ctx.fillStyle = k % 3 === 0 ? '#fbbf24' : k % 3 === 1 ? '#f97316' : '#8d6f55';
-        ctx.fillRect(x + Math.cos(a) * d - s2 / 2, y + Math.sin(a) * d - s2 / 2, s2, s2);
-      }
-    } else if (f.k === 'chip' && f.age < 400) {
+    if (f.k === 'boom') drawExplosion(ctx, x, y, Math.max(f.r * gh, gh * 0.05), f.age, 900, f.seed, false);
+    else if (f.k === 'chip' && f.age < 400) {
       const p = f.age / 400, R = f.r * gh;
       ctx.fillStyle = `rgba(255,220,150,${(1 - p) * 0.8})`;
       ctx.beginPath(); ctx.arc(x, y, R * (0.4 + 0.5 * p), 0, Math.PI * 2); ctx.fill();
     } else if (f.k === 'crash' && f.age < 1100) {
-      // Asteroid hit the "glass": huge fireball + cracks spreading from the impact
-      const p = f.age / 1100, R = f.r * gh;
-      const fb = ctx.createRadialGradient(x, y, 0, x, y, R * (1.3 + 2.5 * p));
-      fb.addColorStop(0, `rgba(255,255,230,${1 - p})`); fb.addColorStop(0.35, `rgba(255,140,40,${(1 - p) * 0.95})`); fb.addColorStop(1, 'rgba(200,30,10,0)');
-      ctx.fillStyle = fb; ctx.beginPath(); ctx.arc(x, y, R * (1.3 + 2.5 * p), 0, Math.PI * 2); ctx.fill();
+      drawExplosion(ctx, x, y, f.r * gh, f.age, 1100, f.seed, true);
+      const p = f.age / 1100;
       ctx.strokeStyle = `rgba(230,245,255,${1 - p})`; ctx.lineWidth = Math.max(2, gh * 0.005);
       const cr = seeded(f.seed || 0.3);
       for (let k = 0; k < 9; k++) {
-        const a = (k / 9) * Math.PI * 2 + cr() * 0.5;
+        const a = (k / 9) * Math.PI * 2 + cr() * 0.5, len = gh * (0.25 + cr() * 0.35);
         let px = x, py = y; ctx.beginPath(); ctx.moveTo(px, py);
-        const len = gh * (0.25 + cr() * 0.35);
         for (let s = 1; s <= 5; s++) { const aa = a + (cr() - 0.5) * 0.5; px = x + Math.cos(aa) * len * s / 5; py = y + Math.sin(aa) * len * s / 5; ctx.lineTo(px, py); }
         ctx.stroke();
       }
@@ -398,7 +547,6 @@ function drawMeteorScene(ctx, L, sc) {
       ctx.fillStyle = f.bad ? '#fca5a5' : '#fde68a'; ctx.fillText(f.text, x, y - p * gh * 0.1);
       ctx.globalAlpha = 1;
     } else if (f.k === 'miss' && f.age < 700) {
-      // Where the ball was seen but nothing was hit: ring + cross, so players see it was detected
       const p = f.age / 700, R = gh * 0.05 * (1 + 0.6 * p);
       ctx.strokeStyle = `rgba(255,255,255,${1 - p})`; ctx.lineWidth = Math.max(3, gh * 0.008);
       ctx.beginPath(); ctx.arc(x, y, R, 0, Math.PI * 2); ctx.stroke();
@@ -406,13 +554,19 @@ function drawMeteorScene(ctx, L, sc) {
     }
   }
 
-  // Red border while the shield takes a hit
+  if (sc.frames) {                                    // optional screen-wall look
+    const cols = 5, rows = 3, gap = Math.max(4, gh * 0.03), rad = gh * 0.05;
+    const pw = (gw - gap * (cols + 1)) / cols, ph = (gh - gap * (rows + 1)) / rows;
+    ctx.fillStyle = '#05070c';
+    ctx.beginPath(); ctx.rect(gx, gy, gw, gh);
+    for (let r2 = 0; r2 < rows; r2++) for (let c = 0; c < cols; c++) addRoundRect(ctx, gx + gap + c * (pw + gap), gy + gap + r2 * (ph + gap), pw, ph, rad);
+    ctx.fill('evenodd');
+  }
   if (sc.crash) {
     ctx.strokeStyle = 'rgba(239,68,68,.85)';
     ctx.lineWidth = gh * 0.035;
     ctx.strokeRect(gx, gy, gw, gh);
   }
-
   if (sc.banner) {
     ctx.font = `900 ${gh * 0.16}px system-ui, sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -423,6 +577,210 @@ function drawMeteorScene(ctx, L, sc) {
   ctx.restore();
 }
 
+// ---------- Kids & logic games ----------
+const KID_FONT = '"Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", system-ui, sans-serif';
+
+function drawShape(ctx, cx, cy, s, it) {
+  if (it.num !== undefined) {
+    ctx.font = `900 ${s * 0.95}px system-ui, sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#1e293b'; ctx.fillText(String(it.num), cx, cy + s * 0.04);
+    return;
+  }
+  ctx.fillStyle = it.color; ctx.strokeStyle = '#1e293b'; ctx.lineWidth = Math.max(2, s * 0.06);
+  const h = s * 0.42;
+  ctx.beginPath();
+  if (it.shape === 'circle') ctx.arc(cx, cy, h, 0, Math.PI * 2);
+  else if (it.shape === 'square') ctx.rect(cx - h * 0.9, cy - h * 0.9, h * 1.8, h * 1.8);
+  else if (it.shape === 'triangle') { ctx.moveTo(cx, cy - h); ctx.lineTo(cx + h, cy + h * 0.8); ctx.lineTo(cx - h, cy + h * 0.8); ctx.closePath(); }
+  else {                                             // star
+    for (let k = 0; k < 10; k++) {
+      const a = -Math.PI / 2 + k * Math.PI / 5, rr = k % 2 ? h * 0.45 : h * 1.05;
+      k ? ctx.lineTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr) : ctx.moveTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
+    }
+    ctx.closePath();
+  }
+  ctx.fill(); ctx.stroke();
+}
+
+function drawBalloon(ctx, x, y, R, color, label, state) {
+  ctx.save();
+  if (state === 'wrong') { ctx.globalAlpha = 0.35; color = '#94a3b8'; }
+  ctx.strokeStyle = '#334155'; ctx.lineWidth = Math.max(1.5, R * 0.03);
+  ctx.beginPath(); ctx.moveTo(x, y + R * 1.18);
+  ctx.quadraticCurveTo(x - R * 0.25, y + R * 1.6, x, y + R * 2.1); ctx.stroke();
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.moveTo(x, y + R * 1.08); ctx.lineTo(x - R * 0.12, y + R * 1.24); ctx.lineTo(x + R * 0.12, y + R * 1.24); ctx.closePath(); ctx.fill();
+  const g = ctx.createRadialGradient(x - R * 0.35, y - R * 0.45, R * 0.1, x, y, R * 1.2);
+  g.addColorStop(0, '#ffffff'); g.addColorStop(0.18, color); g.addColorStop(1, color);
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.ellipse(x, y, R * 0.92, R * 1.12, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.lineWidth = Math.max(2, R * 0.04); ctx.strokeStyle = 'rgba(15,23,42,.35)'; ctx.stroke();
+  if (label !== undefined) {
+    ctx.font = `900 ${R * 0.95}px system-ui, sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.lineWidth = R * 0.12; ctx.strokeStyle = 'rgba(15,23,42,.75)'; ctx.lineJoin = 'round';
+    ctx.strokeText(String(label), x, y + R * 0.04);
+    ctx.fillStyle = '#ffffff'; ctx.fillText(String(label), x, y + R * 0.04);
+  }
+  ctx.restore();
+}
+
+function drawConfetti(ctx, x, y, R, age, seed) {
+  const p = age / 1100;
+  if (p >= 1) return;
+  const r = seeded(seed || 0.4), cols = ['#ef4444', '#f59e0b', '#22c55e', '#3b82f6', '#a855f7', '#ec4899'];
+  for (let k = 0; k < 28; k++) {
+    const a = r() * Math.PI * 2, sp = 1 + r() * 2.2;
+    const px = x + Math.cos(a) * R * sp * Math.min(1, p * 2.5), py = y + Math.sin(a) * R * sp * Math.min(1, p * 2.5) + R * 2.2 * p * p;
+    const s = R * (0.08 + r() * 0.08);
+    ctx.save(); ctx.translate(px, py); ctx.rotate(r() * 6 + p * 10);
+    ctx.globalAlpha = 1 - p; ctx.fillStyle = cols[k % cols.length];
+    ctx.fillRect(-s, -s * 0.5, s * 2, s);
+    ctx.restore();
+  }
+}
+
+function drawFloatText(ctx, x, y, size, text, age, bad) {
+  if (age >= 1100) return;
+  const p = age / 1100;
+  ctx.globalAlpha = 1 - p * p;
+  ctx.font = `900 ${size}px system-ui, sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round'; ctx.lineWidth = size * 0.16; ctx.strokeStyle = bad ? '#7c2d12' : '#1e3a8a';
+  ctx.strokeText(text, x, y - p * size * 1.2);
+  ctx.fillStyle = bad ? '#fdba74' : '#fef08a'; ctx.fillText(text, x, y - p * size * 1.2);
+  ctx.globalAlpha = 1;
+}
+
+// Math Balloons / What Comes Next: a question panel and answer choices
+function drawQuizScene(ctx, L, sc) {
+  const { gx, gy, gw, gh } = L;
+  ctx.save();
+  ctx.beginPath(); ctx.rect(gx, gy, gw, gh); ctx.clip();
+  const sky = ctx.createLinearGradient(0, gy, 0, gy + gh);
+  sky.addColorStop(0, '#4f8cff'); sky.addColorStop(1, '#a7dcff');
+  ctx.fillStyle = sky; ctx.fillRect(gx, gy, gw, gh);
+  const cr = seeded(0.27);
+  ctx.fillStyle = 'rgba(255,255,255,.75)';
+  for (let k = 0; k < 6; k++) {                      // clouds
+    const cx = gx + cr() * gw, cy = gy + gh * (0.08 + cr() * 0.45), s = gh * (0.05 + cr() * 0.05);
+    ctx.beginPath();
+    ctx.arc(cx, cy, s, 0, Math.PI * 2); ctx.arc(cx + s, cy - s * 0.4, s * 1.2, 0, Math.PI * 2); ctx.arc(cx + s * 2.1, cy, s, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.fillStyle = '#4ade80'; ctx.fillRect(gx, gy + gh * 0.93, gw, gh * 0.07);
+
+  // Question panel
+  const qw = gw * 0.62, qh = gh * 0.27, qx = gx + (gw - qw) / 2, qy = gy + gh * 0.05;
+  ctx.fillStyle = 'rgba(255,255,255,.96)';
+  ctx.beginPath(); addRoundRect(ctx, qx, qy, qw, qh, qh * 0.22); ctx.fill();
+  ctx.lineWidth = Math.max(3, gh * 0.008); ctx.strokeStyle = '#1e3a8a'; ctx.stroke();
+  const pr = sc.prompt;
+  if (pr && pr.type === 'text') {
+    ctx.font = `900 ${qh * 0.6}px system-ui, sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#1e293b'; ctx.fillText(pr.text, qx + qw / 2, qy + qh / 2 + qh * 0.03);
+  } else if (pr && pr.type === 'pattern') {
+    const n = pr.items.length + 1, cell = qw / n, s = Math.min(cell * 0.82, qh * 0.72);
+    pr.items.forEach((it, k) => drawShape(ctx, qx + cell * (k + 0.5), qy + qh / 2, s, it));
+    const bx = qx + cell * (n - 0.5);                 // the "?" box
+    ctx.setLineDash([s * 0.12, s * 0.1]); ctx.strokeStyle = '#2563eb'; ctx.lineWidth = Math.max(2, s * 0.06);
+    ctx.strokeRect(bx - s * 0.45, qy + qh / 2 - s * 0.45, s * 0.9, s * 0.9); ctx.setLineDash([]);
+    ctx.font = `900 ${s * 0.7}px system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#2563eb'; ctx.fillText('?', bx, qy + qh / 2 + s * 0.03);
+  }
+
+  // Answer choices
+  for (const c of sc.choices) {
+    const x = gx + c.u * gw, y = gy + c.v * gh, R = c.r * gh;
+    if (c.state === 'right') continue;                // popped
+    if (sc.style === 'math') drawBalloon(ctx, x, y, R, c.color, c.label, c.state);
+    else {
+      ctx.save();
+      if (c.state === 'wrong') ctx.globalAlpha = 0.3;
+      ctx.fillStyle = '#ffffff'; ctx.beginPath(); addRoundRect(ctx, x - R, y - R, R * 2, R * 2, R * 0.25); ctx.fill();
+      ctx.lineWidth = Math.max(3, R * 0.07); ctx.strokeStyle = c.color; ctx.stroke();
+      drawShape(ctx, x, y, R * 1.4, c.item);
+      ctx.restore();
+    }
+  }
+  for (const f of sc.fx) {
+    const x = gx + f.u * gw, y = gy + f.v * gh;
+    if (f.k === 'pop') drawConfetti(ctx, x, y, f.r * gh, f.age, f.seed);
+    else if (f.k === 'text') drawFloatText(ctx, x, y, gh * 0.08, f.text, f.age, f.bad);
+    else if (f.k === 'miss' && f.age < 600) {
+      const p = f.age / 600;
+      ctx.strokeStyle = `rgba(255,255,255,${1 - p})`; ctx.lineWidth = Math.max(3, gh * 0.007);
+      ctx.beginPath(); ctx.arc(x, y, gh * 0.04 * (1 + p), 0, Math.PI * 2); ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+// Memory Match: cards face down (purple) or face up (picture)
+function drawMemoryScene(ctx, L, sc) {
+  const { gx, gy, gw, gh } = L;
+  ctx.save();
+  ctx.beginPath(); ctx.rect(gx, gy, gw, gh); ctx.clip();
+  const bg = ctx.createLinearGradient(0, gy, 0, gy + gh);
+  bg.addColorStop(0, '#3b3486'); bg.addColorStop(1, '#5b4bb5');
+  ctx.fillStyle = bg; ctx.fillRect(gx, gy, gw, gh);
+  const cw = gw / sc.cols, ch = gh / sc.rows, pad = Math.min(cw, ch) * 0.07, rad = Math.min(cw, ch) * 0.1;
+  sc.cards.forEach((c, i) => {
+    const col = i % sc.cols, row = Math.floor(i / sc.cols);
+    const x = gx + col * cw + pad, y = gy + row * ch + pad, w = cw - pad * 2, h = ch - pad * 2;
+    ctx.beginPath(); addRoundRect(ctx, x, y, w, h, rad);
+    if (c.up) {
+      ctx.fillStyle = c.matched ? '#dcfce7' : '#fffbeb'; ctx.fill();
+      ctx.lineWidth = Math.max(3, Math.min(w, h) * (c.matched ? 0.06 : 0.025));
+      ctx.strokeStyle = c.matched ? '#16a34a' : '#f59e0b'; ctx.stroke();
+      ctx.font = `${Math.min(w, h) * 0.62}px ${KID_FONT}`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#111'; ctx.fillText(c.face, x + w / 2, y + h / 2 + h * 0.04);
+    } else {
+      const g = ctx.createLinearGradient(x, y, x + w, y + h);
+      g.addColorStop(0, '#8b5cf6'); g.addColorStop(1, '#4f46e5');
+      ctx.fillStyle = g; ctx.fill();
+      ctx.lineWidth = Math.max(2, Math.min(w, h) * 0.025); ctx.strokeStyle = 'rgba(255,255,255,.5)'; ctx.stroke();
+      ctx.font = `900 ${Math.min(w, h) * 0.5}px system-ui, sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fillText('?', x + w / 2, y + h / 2 + h * 0.03);
+    }
+  });
+  for (const f of sc.fx) {
+    if (f.k !== 'spark' || f.age > 900) continue;
+    const col = f.i % sc.cols, row = Math.floor(f.i / sc.cols);
+    drawConfetti(ctx, gx + (col + 0.5) * cw, gy + (row + 0.5) * ch, Math.min(cw, ch) * 0.35, f.age, f.i * 0.013 + 0.2);
+  }
+  ctx.restore();
+}
+
+// Echo: coloured pads that light up
+function drawEchoScene(ctx, L, sc) {
+  const { gx, gy, gw, gh } = L;
+  ctx.save();
+  ctx.beginPath(); ctx.rect(gx, gy, gw, gh); ctx.clip();
+  ctx.fillStyle = '#111827'; ctx.fillRect(gx, gy, gw, gh);
+  const cw = gw / sc.cols, ch = gh / sc.rows, pad = Math.min(cw, ch) * 0.08, rad = Math.min(cw, ch) * 0.14;
+  sc.pads.forEach((p, i) => {
+    const col = i % sc.cols, row = Math.floor(i / sc.cols);
+    const x = gx + col * cw + pad, y = gy + row * ch + pad, w = cw - pad * 2, h = ch - pad * 2;
+    if (p.lit) {
+      ctx.fillStyle = p.color; ctx.globalAlpha = 0.35;
+      ctx.beginPath(); addRoundRect(ctx, x - pad * 0.6, y - pad * 0.6, w + pad * 1.2, h + pad * 1.2, rad * 1.2); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+    ctx.beginPath(); addRoundRect(ctx, x, y, w, h, rad);
+    ctx.fillStyle = p.color; ctx.globalAlpha = p.lit ? 1 : 0.32; ctx.fill(); ctx.globalAlpha = 1;
+    ctx.lineWidth = Math.max(3, Math.min(w, h) * (p.lit ? 0.05 : 0.02));
+    ctx.strokeStyle = p.lit ? '#ffffff' : p.color; ctx.stroke();
+  });
+  ctx.restore();
+}
+
+const SCENE_DRAW = { meteor: drawMeteorScene, quiz: drawQuizScene, memory: drawMemoryScene, echo: drawEchoScene };
+
 function render(ctx, W, H, s, now) {
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, W, H);
@@ -431,7 +789,7 @@ function render(ctx, W, H, s, now) {
   const tw = L.gw / s.cols, th = L.gh / s.rows;
   const t = Math.min(tw, th);
   const pad = Math.max(2, t * 0.05), rad = t * 0.08;
-  if (s.scene && s.scene.kind === 'meteor') drawMeteorScene(ctx, L, s.scene);
+  if (s.scene && SCENE_DRAW[s.scene.kind]) SCENE_DRAW[s.scene.kind](ctx, L, s.scene);
   else if (s.still) { ctx.fillStyle = '#3a4357'; ctx.fillRect(L.gx, L.gy, L.gw, L.gh); }   // light the gaps too
 
   for (let r = 0; r < (s.scene ? 0 : s.rows); r++) {
@@ -671,7 +1029,8 @@ function startControl() {
   const cfg = {
     rows: 3, cols: 3, dwell: 150, minVis: 0.5, margin: 0.04, roundSec: 45,
     showFeet: true, sound: true, model: 'lite', track: 'hands',
-    ballSens: 25, ballMin: 3, ballMax: 1500, showMotion: false, ballAuto: true, volume: 0.8, ...store.get('cfg', {}),
+    ballSens: 25, ballMin: 3, ballMax: 1500, showMotion: false, ballAuto: true, volume: 0.8,
+    speak: true, frames: false, ...store.get('cfg', {}),
   };
   const saveCfg = () => store.set('cfg', cfg);
 
@@ -688,7 +1047,7 @@ function startControl() {
       if (k === 'rows' || k === 'cols') stopGame();
     });
   }
-  for (const k of ['showFeet', 'sound', 'showMotion', 'ballAuto']) {
+  for (const k of ['showFeet', 'sound', 'showMotion', 'ballAuto', 'speak', 'frames']) {
     $(k).checked = cfg[k];
     $(k).addEventListener('change', () => { cfg[k] = $(k).checked; saveCfg(); });
   }
@@ -794,6 +1153,13 @@ function startControl() {
       noise(0.05, 0.25, 0.15, 5000, 1, 'highpass');
       if (combo > 1) { const f = 523 * Math.pow(2, (combo - 1) * 4 / 12); tone(f, 0.08, 0.25, 'triangle', 0.22); tone(f * 1.5, 0.14, 0.3, 'sine', 0.15); }
     },
+    // Kids & logic games
+    cheer()  { [523, 659, 784, 1046].forEach((f, i) => tone(f, i * 0.07, 0.22, 'triangle', 0.24)); noise(0.25, 0.4, 0.08, 7000, 0.6, 'highpass'); },
+    oops()   { tone(330, 0, 0.18, 'triangle', 0.2, 260); tone(260, 0.16, 0.25, 'triangle', 0.2, 196); },
+    flip()   { noise(0, 0.06, 0.25, 2500, 1.5); tone(600, 0, 0.05, 'sine', 0.12, 900); },
+    match()  { tone(784, 0, 0.15, 'triangle', 0.22); tone(1175, 0.1, 0.3, 'triangle', 0.22); },
+    nomatch(){ tone(392, 0, 0.15, 'sine', 0.15); tone(330, 0.13, 0.22, 'sine', 0.15); },
+    pad(i = 0) { const f = [262, 330, 392, 523, 587, 659, 784, 880, 1047][i % 9]; tone(f, 0, 0.4, 'triangle', 0.28); tone(f * 2, 0, 0.25, 'sine', 0.08); },
     // A new asteroid appears far away: low rising whoosh
     incoming() { noise(0, 0.7, 0.1, 200, 3, 'bandpass', 1400); tone(80, 0, 0.7, 'sine', 0.15, 160); },
     // An asteroid crashes into the glass: huge boom + shattering glass
@@ -1052,6 +1418,10 @@ function startControl() {
     hits: 'Hit the pulsing green tile as fast as you can.',
     lava: 'Yellow blinking = about to turn to lava. Stay off it before it turns red. 3 lives. (Not for ball mode.)',
     ttt: 'Red and Blue take turns. Hit an empty tile to claim it. Get a line across, down or diagonal to win. Pick a level: bigger boards and longer lines are harder, and from level 3 each turn has a time limit. Great with balls.',
+    math: 'A sum appears at the top (it is also read aloud). Hit the balloon with the right answer! Wrong balloons go grey, so you can try again. 10 questions; a star for every first-try answer.',
+    pattern: 'A row of colours, shapes or numbers follows a pattern. Hit the one that comes next! 10 puzzles; a star for every first-try answer.',
+    memory: 'All cards start face down. Hit two cards to turn them over. Same picture = a pair stays open; different = they turn back. Find all pairs in as few moves as you can.',
+    echo: 'Watch the pads light up, then hit them in the same order. Every round adds one more step. How long a pattern can you remember?',
     meteor: 'Asteroids fly toward you and grow bigger. Hit them before they arrive or they crash and break your shield! Hit early = more points. Gray armored ones need 2 hits. Golden comets repair the shield.',
   };
   // Tic-tac-toe levels: bigger boards (smaller tiles = harder to aim) and longer lines
@@ -1062,14 +1432,53 @@ function startControl() {
     { rows: 5, cols: 7, need: 4, turnSec: 12, name: 'Level 4 · 5×7 · 4 in a row · 12 s turns' },
     { rows: 6, cols: 8, need: 5, turnSec: 10, name: 'Level 5 · 6×8 · 5 in a row · 10 s turns' },
   ];
-  TTT_LEVELS.forEach((l, i) => $('tttLevel').add(new Option(l.name, i)));
-  $('tttLevel').value = String(Math.min(TTT_LEVELS.length - 1, store.get('tttLevel', 0)));
-  $('tttLevel').onchange = () => { store.set('tttLevel', +$('tttLevel').value); if (G.mode === 'ttt') startGame(); };
+  const MATH_LEVELS = [
+    { name: 'Level 1 · Add up to 10',                  ops: ['+'], max: 10, choices: 3 },
+    { name: 'Level 2 · Take away within 10',           ops: ['-'], max: 10, choices: 3 },
+    { name: 'Level 3 · Add & take away within 10',     ops: ['+', '-'], max: 10, choices: 4 },
+    { name: 'Level 4 · Add & take away within 20',     ops: ['+', '-'], max: 20, choices: 4 },
+    { name: 'Level 5 · Times tables 2, 5, 10',         ops: ['x'], tables: [2, 5, 10], choices: 4 },
+    { name: 'Level 6 · Times tables 2 to 10',          ops: ['x'], tables: [2, 3, 4, 5, 6, 7, 8, 9, 10], choices: 4 },
+  ];
+  const PATTERN_LEVELS = [
+    { name: 'Level 1 · Colours (red, blue, red, blue…)', kinds: ['colorAB'] },
+    { name: 'Level 2 · Shapes & colours',                kinds: ['shapeABC', 'shapeAAB', 'colorAB'] },
+    { name: 'Level 3 · Counting patterns (2, 4, 6…)',    kinds: ['number'] },
+    { name: 'Level 4 · Mixed (harder)',                   kinds: ['shapeABC', 'shapeAAB', 'shapeABB', 'number', 'numberDown'] },
+  ];
+  const MEMORY_LEVELS = [
+    { name: 'Level 1 · 6 pairs (3×4)',   rows: 3, cols: 4 },
+    { name: 'Level 2 · 8 pairs (4×4)',   rows: 4, cols: 4 },
+    { name: 'Level 3 · 10 pairs (4×5)',  rows: 4, cols: 5 },
+    { name: 'Level 4 · 12 pairs (4×6)',  rows: 4, cols: 6 },
+  ];
+  const ECHO_LEVELS = [
+    { name: 'Level 1 · 4 pads, slow',    rows: 2, cols: 2, speed: 950 },
+    { name: 'Level 2 · 6 pads',          rows: 2, cols: 3, speed: 800 },
+    { name: 'Level 3 · 9 pads, fast',    rows: 3, cols: 3, speed: 650 },
+  ];
+  const LEVELS = { ttt: TTT_LEVELS, math: MATH_LEVELS, pattern: PATTERN_LEVELS, memory: MEMORY_LEVELS, echo: ECHO_LEVELS };
+
+  // Fill the Level menu for the chosen game (each game remembers its own level)
+  function fillLevels() {
+    const m = $('mode').value, list = LEVELS[m], sel = $('level');
+    $('levelRow').hidden = !list;
+    $('undo').hidden = m !== 'ttt';
+    if (!list) return;
+    sel.innerHTML = '';
+    list.forEach((l, i) => sel.add(new Option(l.name, i)));
+    sel.value = String(Math.min(list.length - 1, store.get('level.' + m, 0)));
+  }
+  const curLevel = () => { const list = LEVELS[$('mode').value]; return list ? (list[+$('level').value] || list[0]) : null; };
+  $('level').onchange = () => {
+    store.set('level.' + $('mode').value, +$('level').value);
+    if (G.mode === $('mode').value && G.mode !== 'test') startGame();
+  };
 
   const showHint = () => {
     const m = $('mode').value;
     $('modeHint').textContent = HINTS[m];
-    $('tttLevelRow').hidden = m !== 'ttt';
+    fillLevels();
   };
   $('mode').onchange = () => { showHint(); if ($('mode').value === 'test') startGame(); };
   showHint();
@@ -1078,14 +1487,19 @@ function startControl() {
     const now = performance.now();
     G.mode = $('mode').value;
     G.gridOverride = null;
+    G.lockUntil = 0;
     if (G.mode === 'ttt') {
-      const L = TTT_LEVELS[+$('tttLevel').value] || TTT_LEVELS[0];
+      const L = curLevel() || TTT_LEVELS[0];
       G.ttt = L;
       G.gridOverride = { rows: L.rows, cols: L.cols };
     }
     clearTiles();
     G.score = 0; G.lives = 3; G.invuln = 0; G.flashUntil = 0; G.msg = '';
+    if (cfg.sound) try { audio(); } catch {}
     if (G.mode === 'test') { G.phase = 'play'; return; }
+    if (G.mode === 'math' || G.mode === 'pattern') { startQuiz(now, G.mode, curLevel()); return; }
+    if (G.mode === 'memory') { startMemory(now, curLevel()); return; }
+    if (G.mode === 'echo') { startEcho(now, curLevel()); return; }
     if (G.mode === 'ttt') {
       G.phase = 'play'; G.turn = 'p1'; G.winCells = null; G.history = []; G.lockUntil = 0;
       G.turnEnds = G.ttt.turnSec ? now + G.ttt.turnSec * 1000 : 0;
@@ -1248,7 +1662,7 @@ function startControl() {
     const M = G.met;
     if (!M) return null;
     return {
-      kind: 'meteor',
+      kind: 'meteor', frames: cfg.frames,
       crash: now < M.crashUntil,
       banner: now < M.bannerUntil ? `WAVE ${M.wave}` : '',
       asteroids: M.asteroids.map(m => {
@@ -1257,6 +1671,260 @@ function startControl() {
       }),
       fx: M.fx.map(f => ({ ...f, age: now - f.t0 })),
     };
+  }
+
+  // ---------- Kids & logic games ----------
+  // Speech: kids games read the question aloud (Settings → Read questions aloud)
+  function say(text) {
+    if (!cfg.speak || !('speechSynthesis' in window)) return;
+    try {
+      speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.rate = 0.9; u.pitch = 1.1;
+      speechSynthesis.speak(u);
+    } catch {}
+  }
+  const PRAISE = ['Great job!', 'Awesome!', 'You got it!', 'Super!', 'Well done!', 'Amazing!'];
+  const pick = a => a[Math.floor(Math.random() * a.length)];
+  const rint = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
+  const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+  const BALLOON_COLORS = ['#ef4444', '#f59e0b', '#22c55e', '#a855f7', '#ec4899', '#06b6d4'];
+  const levelNo = (list, lv) => Math.max(0, list.indexOf(lv)) + 1;
+  // Extra room around a target: balls land less precisely than clicks
+  const tolFor = s => (s.src === 'ball' ? 0.08 : s.src === 'touch' ? 0 : 0.02);
+
+  // --- Math Balloons ---
+  function mathQuestion(lv) {
+    const op = pick(lv.ops);
+    let ans, text, spoken, t = 0;
+    if (op === '+') { ans = rint(2, lv.max); const a = rint(0, ans), b = ans - a; text = `${a} + ${b} = ?`; spoken = `${a} plus ${b}?`; }
+    else if (op === '-') { const a = rint(1, lv.max), b = rint(0, a); ans = a - b; text = `${a} − ${b} = ?`; spoken = `${a} take away ${b}?`; }
+    else { t = pick(lv.tables); const k = rint(1, 10); ans = t * k; text = `${k} × ${t} = ?`; spoken = `${k} times ${t}?`; }
+    const opts = new Set([ans]);
+    if (t) [ans - t, ans + t].forEach(v => { if (v >= 0 && opts.size < lv.choices) opts.add(v); });
+    const spread = t ? Math.max(2, Math.round(ans * 0.2)) : 3;
+    for (let g = 0; opts.size < lv.choices && g < 200; g++) { const v = ans + rint(-spread, spread); if (v >= 0) opts.add(v); }
+    return { prompt: { type: 'text', text }, spoken, answers: shuffle([...opts]).map(v => ({ label: v, ok: v === ans })) };
+  }
+
+  // --- What Comes Next? ---
+  const SHAPES = ['circle', 'square', 'triangle', 'star'];
+  const PCOLORS = ['#ef4444', '#3b82f6', '#22c55e', '#eab308', '#a855f7'];
+  const itemKey = it => (it.num !== undefined ? 'n' + it.num : it.shape + it.color);
+  function patternQuestion(lv) {
+    const kind = pick(lv.kinds);
+    if (kind === 'number' || kind === 'numberDown') {
+      const step = pick([1, 2, 5, 10]), down = kind === 'numberDown';
+      const start = down ? step * rint(5, 9) : step * rint(0, 4);
+      const seq = Array.from({ length: 5 }, (_, i) => start + (down ? -step : step) * i);
+      const ans = seq.pop();
+      const opts = new Set([ans]);
+      [ans + step, ans - step, ans + 1, ans - 1, ans + 2].forEach(v => { if (v >= 0 && opts.size < 3) opts.add(v); });
+      return { prompt: { type: 'pattern', items: seq.map(num => ({ num })) }, spoken: 'What number comes next?',
+               answers: shuffle([...opts]).map(num => ({ item: { num }, ok: num === ans })) };
+    }
+    // Shape / colour patterns built from a repeating unit
+    const units = { colorAB: [0, 1], shapeABC: [0, 1, 2], shapeAAB: [0, 0, 1], shapeABB: [0, 1, 1] };
+    const unit = units[kind];
+    const colors = shuffle([...PCOLORS]), shapes = shuffle([...SHAPES]);
+    const els = kind === 'colorAB'
+      ? [0, 1, 2].map(i => ({ shape: 'circle', color: colors[i] }))
+      : [0, 1, 2, 3].map(i => ({ shape: shapes[i], color: colors[i] }));
+    const seq = Array.from({ length: 6 }, (_, i) => els[unit[i % unit.length]]);
+    const ans = seq.pop();
+    const opts = [ans];
+    for (const e of shuffle([...els])) if (opts.length < 3 && !opts.some(o => itemKey(o) === itemKey(e))) opts.push(e);
+    return { prompt: { type: 'pattern', items: seq }, spoken: 'What comes next?',
+             answers: shuffle(opts).map(item => ({ item, ok: itemKey(item) === itemKey(ans) })) };
+  }
+
+  function startQuiz(now, kind, lv) {
+    G.phase = 'play';
+    G.quiz = { kind, lv, q: 0, total: 10, stars: 0, fx: [], cur: null, nextAt: 0, firstTry: true };
+    nextQuestion(now);
+  }
+  function nextQuestion(now) {
+    const Q = G.quiz;
+    const made = Q.kind === 'math' ? mathQuestion(Q.lv) : patternQuestion(Q.lv);
+    const n = made.answers.length;
+    Q.cur = {
+      prompt: made.prompt,
+      choices: made.answers.map((a, i) => ({ u: (i + 0.5) / n, v: 0.64, r: Q.kind === 'math' ? 0.15 : 0.13,
+        label: a.label, item: a.item, ok: a.ok, state: '', color: BALLOON_COLORS[(i + Q.q) % BALLOON_COLORS.length] })),
+    };
+    Q.firstTry = true;
+    G.lockUntil = now + 600;
+    setTimeout(() => say(made.spoken), 200);
+  }
+  function tickQuiz(now, shots, hud) {
+    const Q = G.quiz, A = gridAspect(), list = Q.kind === 'math' ? MATH_LEVELS : PATTERN_LEVELS;
+    Q.fx = Q.fx.filter(f => now - f.t0 < 1300);
+    if (G.phase === 'play' && Q.nextAt && now >= Q.nextAt) {
+      Q.nextAt = 0; Q.q++;
+      if (Q.q >= Q.total) {
+        G.phase = 'over';
+        const key = `best.${Q.kind}.${list.indexOf(Q.lv)}`, best = Math.max(Q.stars, store.get(key, 0));
+        store.set(key, best);
+        G.overMsg = `${Q.stars >= 8 ? 'Amazing!' : Q.stars >= 5 ? 'Great job!' : 'Good try!'}\n★ ${Q.stars} out of ${Q.total} · best ★ ${best} · press Start`;
+        play('win'); say(`You got ${Q.stars} stars!`);
+      } else nextQuestion(now);
+    }
+    if (G.phase === 'play' && !Q.nextAt) {
+      for (const s of shots) {
+        if (now < G.lockUntil) break;
+        const hit = Q.cur.choices.find(c => c.state !== 'wrong' && Math.hypot((s.u - c.u) * A, s.v - c.v) <= c.r * 1.15 + tolFor(s));
+        if (!hit) { if (s.src !== 'touch') Q.fx.push({ k: 'miss', u: s.u, v: s.v, t0: now }); continue; }
+        G.lockUntil = now + 700;                        // one answer per throw
+        if (hit.ok) {
+          hit.state = 'right';
+          if (Q.firstTry) Q.stars++;
+          const word = pick(PRAISE);
+          Q.fx.push({ k: 'pop', u: hit.u, v: hit.v, r: hit.r, t0: now, seed: Math.random() });
+          Q.fx.push({ k: 'text', u: hit.u, v: hit.v - hit.r * 1.5, t0: now, text: word });
+          play('cheer'); say(word);
+          Q.nextAt = now + 1700;
+        } else {
+          hit.state = 'wrong'; Q.firstTry = false;
+          Q.fx.push({ k: 'text', u: hit.u, v: hit.v - hit.r * 1.5, t0: now, text: 'Try again!', bad: true });
+          play('oops');
+        }
+        break;
+      }
+    }
+    if (G.phase === 'over') G.msg = G.overMsg;
+    hud.left = `${Q.kind === 'math' ? 'Math Balloons' : 'What Comes Next?'} · L${levelNo(list, Q.lv)} · Question ${Math.min(Q.q + 1, Q.total)} of ${Q.total}`;
+    hud.right = `★ ${Q.stars}`;
+    return hud;
+  }
+  function quizScene(now) {
+    const Q = G.quiz;
+    if (!Q || !Q.cur) return null;
+    return {
+      kind: 'quiz', style: Q.kind, prompt: Q.cur.prompt,
+      choices: Q.cur.choices.map(c => ({ u: c.u, v: c.v, r: c.r, label: c.label, item: c.item, state: c.state, color: c.color })),
+      fx: Q.fx.map(f => ({ ...f, age: now - f.t0 })),
+    };
+  }
+
+  // --- Memory Match ---
+  const EMOJI = ['🐶', '🐱', '🦁', '🐸', '🐵', '🐼', '🐷', '🐰', '🦊', '🐯', '🐨', '🐮', '🐔', '🐙', '🦋', '🐢'];
+  function startMemory(now, lv) {
+    const pairs = (lv.rows * lv.cols) / 2;
+    const faces = shuffle([...EMOJI]).slice(0, pairs);
+    G.mem = { lv, rows: lv.rows, cols: lv.cols, pairs, found: 0, moves: 0, start: now, first: -1, second: -1, backAt: 0, fx: [],
+              cards: shuffle([...faces, ...faces]).map(face => ({ face, up: false, matched: false })) };
+    G.phase = 'play'; G.lockUntil = now + 400;
+    play('go'); say('Find the pairs!');
+  }
+  function tickMemory(now, shots, hud) {
+    const M = G.mem;
+    M.fx = M.fx.filter(f => now - f.t0 < 1000);
+    if (M.backAt && now >= M.backAt) {               // not a pair: turn both back over
+      M.cards[M.first].up = false; M.cards[M.second].up = false;
+      M.first = M.second = -1; M.backAt = 0;
+    }
+    if (G.phase === 'play' && !M.backAt) {
+      for (const s of shots) {
+        if (now < G.lockUntil) break;
+        const c = Math.floor(s.u * M.cols), r = Math.floor(s.v * M.rows);
+        if (c < 0 || r < 0 || c >= M.cols || r >= M.rows) continue;
+        const i = r * M.cols + c, card = M.cards[i];
+        if (card.up || card.matched) continue;
+        card.up = true; G.lockUntil = now + 450; play('flip');
+        if (M.first < 0) { M.first = i; break; }
+        M.second = i; M.moves++;
+        if (M.cards[M.first].face === card.face) {
+          M.cards[M.first].matched = card.matched = true; M.found++;
+          M.fx.push({ k: 'spark', i: M.first, t0: now }, { k: 'spark', i, t0: now });
+          M.first = M.second = -1; play('match');
+          if (M.found === M.pairs) {
+            G.phase = 'over';
+            const secs = Math.round((now - M.start) / 1000), key = 'best.memory.' + MEMORY_LEVELS.indexOf(M.lv);
+            const prev = store.get(key, 0), best = prev ? Math.min(prev, M.moves) : M.moves;
+            store.set(key, best);
+            G.overMsg = `All pairs found!\n${M.moves} moves · ${secs}s · best ${best} moves · press Start`;
+            play('win'); say('Well done! You found all the pairs!');
+          }
+        } else { M.backAt = now + 1200; play('nomatch'); }
+        break;
+      }
+    }
+    if (G.phase === 'over') G.msg = G.overMsg;
+    hud.left = `Memory Match · L${levelNo(MEMORY_LEVELS, M.lv)}`;
+    hud.right = `Pairs ${M.found}/${M.pairs} · Moves ${M.moves}`;
+    return hud;
+  }
+  function memoryScene(now) {
+    const M = G.mem;
+    return M && { kind: 'memory', rows: M.rows, cols: M.cols,
+                  cards: M.cards.map(c => ({ face: c.face, up: c.up || c.matched, matched: c.matched })),
+                  fx: M.fx.map(f => ({ ...f, age: now - f.t0 })) };
+  }
+
+  // --- Echo (watch the pads, then repeat them in order) ---
+  const PAD_COLORS = ['#ef4444', '#3b82f6', '#22c55e', '#eab308', '#a855f7', '#f97316', '#06b6d4', '#ec4899', '#84cc16'];
+  function startEcho(now, lv) {
+    const n = lv.rows * lv.cols, key = 'best.echo.' + ECHO_LEVELS.indexOf(lv);
+    G.echo = { lv, n, key, seq: [rint(0, n - 1)], state: 'show', showIdx: 0, nextAt: now + 1400, inputIdx: 0, lit: -1, litUntil: 0, best: store.get(key, 0) };
+    G.phase = 'play'; play('go'); say('Watch carefully!');
+  }
+  function tickEcho(now, shots, hud) {
+    const E = G.echo, lv = E.lv;
+    if (E.lit >= 0 && now >= E.litUntil) E.lit = -1;
+    if (G.phase === 'play' && E.state === 'show' && now >= E.nextAt) {
+      if (E.showIdx < E.seq.length) {
+        E.lit = E.seq[E.showIdx]; E.litUntil = now + lv.speed * 0.6; play('pad', E.lit);
+        E.showIdx++; E.nextAt = now + lv.speed;
+      } else {
+        E.state = 'input'; E.inputIdx = 0; G.lockUntil = now + 200;
+        if (E.seq.length <= 2) say('Your turn!');
+      }
+    }
+    if (G.phase === 'play' && E.state === 'input') {
+      for (const s of shots) {
+        if (now < G.lockUntil) break;
+        const c = Math.floor(s.u * lv.cols), r = Math.floor(s.v * lv.rows);
+        if (c < 0 || r < 0 || c >= lv.cols || r >= lv.rows) continue;
+        const pad = r * lv.cols + c;
+        E.lit = pad; E.litUntil = now + 320; G.lockUntil = now + 400;
+        if (pad === E.seq[E.inputIdx]) {
+          play('pad', pad); E.inputIdx++;
+          if (E.inputIdx === E.seq.length) {             // whole pattern right: one step longer
+            E.best = Math.max(E.best, E.seq.length); store.set(E.key, E.best);
+            E.seq.push(rint(0, E.n - 1));
+            E.state = 'show'; E.showIdx = 0; E.nextAt = now + 1400;
+            setTimeout(() => play('match'), 250);
+          }
+        } else {
+          G.phase = 'over'; play('lose');
+          const got = E.seq.length - 1;
+          E.best = Math.max(E.best, got); store.set(E.key, E.best);
+          G.overMsg = `Oops, a different pad!\nYou remembered ${got} · best ${E.best} · press Start`;
+          say(`You remembered ${got}!`);
+        }
+        break;
+      }
+    }
+    if (G.phase === 'over') G.msg = G.overMsg;
+    hud.left = `Echo · L${levelNo(ECHO_LEVELS, lv)} · Pattern of ${E.seq.length}`;
+    hud.right = G.phase !== 'play' ? `Best ${E.best}` : E.state === 'show' ? 'Watch…' : `Your turn! (${E.inputIdx}/${E.seq.length})`;
+    return hud;
+  }
+  function echoScene() {
+    const E = G.echo;
+    return E && { kind: 'echo', rows: E.lv.rows, cols: E.lv.cols,
+                  pads: Array.from({ length: E.n }, (_, i) => ({ color: PAD_COLORS[i], lit: E.lit === i })) };
+  }
+
+  // Picture data for whichever game is running
+  function sceneFor(now) {
+    switch (G.mode) {
+      case 'meteor': return meteorScene(now);
+      case 'math': case 'pattern': return quizScene(now);
+      case 'memory': return memoryScene(now);
+      case 'echo': return echoScene();
+      default: return null;
+    }
   }
 
   function tickGame(now, pressed, edges, shots = []) {
@@ -1270,6 +1938,10 @@ function startControl() {
       if (t.k === 'warn' && now > t.until) { t.k = 'lava'; t.until = now + 2600; play('sizzle'); }
       else if (t.k === 'lava' && now > t.until) t.k = '';
     }
+
+    if (G.mode === 'math' || G.mode === 'pattern') return tickQuiz(now, shots, hud);
+    if (G.mode === 'memory') return tickMemory(now, shots, hud);
+    if (G.mode === 'echo') return tickEcho(now, shots, hud);
 
     if (G.mode === 'ttt') {
       const TEAM = { p1: 'Red', p2: 'Blue' };
@@ -1311,7 +1983,7 @@ function startControl() {
       if (G.phase === 'over' && now - G.overAt > 1500) G.msg = G.overMsg;
       const timer = G.phase === 'play' && G.turnEnds ? ` · ${Math.max(0, Math.ceil((G.turnEnds - now) / 1000))}s` : '';
       return {
-        left: `Tic-tac-toe · L${TTT_LEVELS.indexOf(L) + 1} · ${L.need} in a row`,
+        left: `Tic-tac-toe · L${Math.max(0, TTT_LEVELS.indexOf(L)) + 1} · ${L.need} in a row`,
         right: G.phase === 'play' ? `${TEAM[G.turn]}'s turn${timer}` : '',
       };
     }
@@ -1566,6 +2238,39 @@ function startControl() {
         if (yy >= 0 && yy < MH && xx >= 0 && xx < MW && ex[yy * MW + xx] < v) ex[yy * MW + xx] = v;
       }
     }
+    // Explosions and confetti throw small fast pieces around that this small
+    // copy can't follow. The game knows where they are: ignore those areas
+    // completely while they play (plus the camera delay).
+    const ML = layout(MW, MH, cfg);
+    const sc = snap.scene;
+    // Mark a ring (inner..outer radius, in model pixels) as fully explained
+    const ring = (cx, cy, inner, outer) => {
+      for (let y = Math.max(0, Math.floor(cy - outer)); y <= Math.min(MH - 1, Math.ceil(cy + outer)); y++)
+        for (let x = Math.max(0, Math.floor(cx - outer)); x <= Math.min(MW - 1, Math.ceil(cx + outer)); x++) {
+          const d2 = (x - cx) ** 2 + (y - cy) ** 2;
+          if (d2 <= outer * outer && d2 >= inner * inner) ex[y * MW + x] = 255;
+        }
+    };
+    // Effects (explosions, confetti, our own miss rings and score popups)
+    const SPREAD = { crash: 5.5, boom: 4.5, chip: 1.5, pop: 3.2, miss: 1.6, text: 2.6 };
+    for (const f of (sc && sc.fx) || []) {
+      if (!(f.k in SPREAD) || f.age > 1500 || f.u === undefined) continue;
+      ring(ML.gx + f.u * ML.gw, ML.gy + f.v * ML.gh, 0, Math.max(0.05, f.r || 0.08) * ML.gh * SPREAD[f.k] + 2);
+    }
+    // Asteroids: their growing edge, heat glow and danger ring move fast, but
+    // the middle stays steady, so a ball hitting the middle still counts
+    for (const m of (sc && sc.asteroids) || []) {
+      const R = m.r * ML.gh;
+      ring(ML.gx + m.u * ML.gw, ML.gy + m.v * ML.gh, Math.max(0, R * 0.7 - 1), R * 1.55 + 2);
+    }
+    // Red flash border when an asteroid crashes
+    if (sc && sc.crash) {
+      const b = Math.ceil(ML.gh * 0.05) + 2;
+      for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) {
+        const inX = x >= ML.gx - 1 && x <= ML.gx + ML.gw + 1, inY = y >= ML.gy - 1 && y <= ML.gy + ML.gh + 1;
+        if (inX && inY && (x < ML.gx + b || x > ML.gx + ML.gw - b || y < ML.gy + b || y > ML.gy + ML.gh - b)) ex[y * MW + x] = 255;
+      }
+    }
     recentMask = ex;
   }
   // How much of the camera's change at pixel i the projector itself explains
@@ -1721,21 +2426,27 @@ function startControl() {
       }
       // Otherwise, if the ball vanished into a spot where the picture is moving
       // (an asteroid): follow its direction into that spot and aim at the middle.
-      if (!usedTurn && best.byProj && best.mask) {
-        const pf = ev.frames[bi - 1];
+      // (If the ball's last sighting touched such a spot, it flew in there and
+      // never came back out: start from that last sighting.)
+      const lastSeen = ev.frames[ev.frames.length - 1];
+      const anchor = !usedTurn && lastSeen.byProj && lastSeen.mask ? lastSeen : best;
+      const ai = ev.frames.indexOf(anchor);
+      if (!usedTurn && anchor.byProj && anchor.mask) {
+        px = anchor.x; py = anchor.y;
+        const pf = ev.frames[ai - 1];
         let dx = 0, dy = -1;
-        if (pf) { dx = best.x - pf.x; dy = best.y - pf.y; const l = Math.hypot(dx, dy) || 1; dx /= l; dy /= l; }
+        if (pf) { dx = anchor.x - pf.x; dy = anchor.y - pf.y; const l = Math.hypot(dx, dy) || 1; dx /= l; dy /= l; }
         let inStart = -1, inEnd = -1, k = 1;
         for (; k <= 16; k++) {
-          const x = Math.round(best.x + dx * k), y = Math.round(best.y + dy * k);
+          const x = Math.round(anchor.x + dx * k), y = Math.round(anchor.y + dy * k);
           if (x < 0 || y < 0 || x >= BW || y >= bH) break;
-          const i = y * BW + x, m = modelIdx[i] >= 0 && best.mask[modelIdx[i]] > 30;
+          const i = y * BW + x, m = modelIdx[i] >= 0 && anchor.mask[modelIdx[i]] > 30;
           if (m && inStart < 0) inStart = k;
           if (!m && inStart >= 0) { inEnd = k; break; }
         }
         if (inStart >= 0) {
           const mid = (inStart + (inEnd > 0 ? inEnd : k)) / 2;
-          px = best.x + dx * mid; py = best.y + dy * mid;
+          px = anchor.x + dx * mid; py = anchor.y + dy * mid;
         }
       }
       const cx = (px + 0.5) / BW, cy = (py + 0.5) / bH;
@@ -1780,6 +2491,7 @@ function startControl() {
   // ---------- Main loop ----------
   // The loop runs on this page's animation frames. When this page is hidden
   // (e.g. minimized behind the projector), the projector's frames drive it.
+  let prevCam = [];
   let lastVT = -1, poses = [], prev = [], det = 0, detT = performance.now(), fps = 0, lastStep = 0, lastSnapshot = null;
   function loop() {
     step();
@@ -1824,6 +2536,10 @@ function startControl() {
 
     const pressed = Array.from({ length: n() }, () => false);
     for (const [i, p] of presence) if (i < n() && now - p.first >= cfg.dwell) pressed[i] = true;
+    // Tiles a hand/foot just landed on (camera only) = one "tap" each
+    const camTaps = [];
+    pressed.forEach((v, i) => { if (v && !prevCam[i]) camTaps.push(i); });
+    prevCam = pressed.slice();
     for (const i of sim.values()) if (i < n()) pressed[i] = true;
     for (const i of ballHits) if (i < n()) pressed[i] = true;   // a ball hit is a one-frame press
     ballHits.length = 0;
@@ -1831,8 +2547,14 @@ function startControl() {
     pressed.forEach((v, i) => { if (v && !prev[i]) edges.push(i); });
     prev = pressed;
 
-    // Touching (hands/feet modes) also counts as a shot in free-target games
-    if (!ballMode) for (const f of gridFeet) shots.push({ u: f.u, v: f.v, src: 'touch' });
+    // Touching (hands/feet modes) counts as a shot when a hand/foot lands, at its exact spot
+    if (!ballMode) {
+      const R = GR().rows, C = GR().cols;
+      for (const t of camTaps) {
+        const f = gridFeet.find(p => Math.floor(p.v * R) * C + Math.floor(p.u * C) === t);
+        if (f) shots.push({ u: f.u, v: f.v, src: 'touch' });
+      }
+    }
 
     const hud = tickGame(now, pressed, edges, shots);
     shots.length = 0;
@@ -1845,7 +2567,7 @@ function startControl() {
       feet: cfg.showFeet ? gridFeet : [],
       hitFlash: now < G.flashUntil,
       still: ballMode,
-      scene: G.mode === 'meteor' ? meteorScene(now) : null,
+      scene: sceneFor(now),
       turnColor: G.mode === 'ttt' && G.phase === 'play' ? (G.turn === 'p1' ? '#ef4444' : '#3b82f6') : null,
       v: APP_VERSION,
     };
@@ -1894,7 +2616,7 @@ function startControl() {
   // Expose a tiny hook for automated checks
   window.__floorGrid = {
     applyH, homography, cfg, G, sim, step, pointsOf, setCalibration, health,
-    setPoses(p) { poses = p; }, sortCorners,
+    setPoses(p) { poses = p; }, sortCorners, render,
     get lastSnapshot() { return lastSnapshot; },
     get ballInfo() { return ballInfo; },
     feed(frame, h) { if (bH !== h) { bH = h; prevGray = null; mapKey = ''; } processGray(performance.now(), frame); },

@@ -24,5 +24,15 @@ if available, or opens `floor-grid.html` directly.
   6×8 (5 in a row) with turn timers. A coloured frame shows whose turn it is; "Undo last move" fixes mistakes.
 - **Asteroid Attack** - asteroids fly toward you and grow. Hit them with balls before they crash
   into the screen. Armored rocks need 2 hits, golden comets repair the shield, combos up to x4.
+  Realistic lit 3D rocks, nebula and planet backdrop, fireball explosions, optional screen-wall window frames.
+
+**Kids & learning**
+- **Math Balloons** – a sum appears (and is read aloud); hit the balloon with the answer. Levels: adding to 10,
+  taking away, within 20, times tables. Wrong balloons go grey so kids can try again; stars for first-try answers.
+- **What Comes Next?** – colour, shape and number patterns; hit the piece that comes next.
+
+**Logic & memory**
+- **Memory Match** – flip two cards at a time to find the animal pairs (6 to 12 pairs).
+- **Echo** – watch the pads light up, then hit them in the same order; the pattern grows each round.
 
 Input can be hands (wall), feet (floor), or **thrown balls** (wall, strike-style).

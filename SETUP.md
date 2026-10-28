@@ -36,7 +36,8 @@ Players throw soft balls at the wall instead of touching it.
    - Hits counted on the wrong tile → move the camera closer to the projector and recalibrate.
    - "Hidden behind a player" → mount the camera higher (above the projector, looking over
      players' heads), or have players throw from the side.
-6. Games that work with balls: **Test tiles**, **Hit the lights**, **Tic-tac-toe (2 teams)**, **Meteor Storm**.
+6. Games that work with balls: **Test tiles**, **Hit the lights**, **Asteroid Attack**, **Tic-tac-toe**, **Math Balloons**,
+   **What Comes Next?**, **Memory Match** and **Echo**.
 
 ### Asteroid Attack
 
@@ -92,3 +93,13 @@ The screen preview shows what's lit.
 - Tiles flicker: raise *Touch delay* in Settings (try 250 ms).
 - Wrong tile lights up: recalibrate, and click the corners carefully.
 - Moved the camera or projector: recalibrate.
+
+## Kids & logic games
+
+- **Math Balloons** (for about 5–9 years): pick a level (adding to 10, taking away, within 20, times tables).
+  The sum is read aloud; turn this off under Settings → *Read questions aloud*.
+- **What Comes Next?**: colour, shape and number patterns.
+- **Memory Match**: find all the animal pairs in as few moves as possible.
+- **Echo**: repeat a growing pattern of coloured pads.
+- Each game remembers its own level and best score on the laptop.
+- One throw = one answer: after a hit, the game ignores hits for a moment so a bouncing ball can't answer twice.
