@@ -108,6 +108,7 @@
             <option value="hands">Hands (wall)</option>
             <option value="feet">Feet (floor)</option>
             <option value="both">Hands + feet</option>
+            <option value="ball">Ball (throwing)</option>
           </select>
         </div>
         <p class="hint" id="trackHint"></p>
@@ -129,6 +130,7 @@
             <option value="test">Test tiles</option>
             <option value="hits">Hit the lights</option>
             <option value="lava">Lava floor</option>
+            <option value="ttt">Tic-tac-toe (2 teams)</option>
           </select>
           <button id="start">Start</button>
           <button id="stop" class="ghost">Stop</button>
@@ -148,6 +150,14 @@
           <label for="showFeet">Show tracked points on grid</label><input id="showFeet" type="checkbox">
           <label for="sound">Sound</label><input id="sound" type="checkbox">
         </div>
+        <h2 style="margin-top:16px">Ball mode</h2>
+        <div class="settings" style="margin-top:0">
+          <label for="ballSens">Motion threshold (5–120)</label><input id="ballSens" type="number" min="5" max="120" step="1">
+          <label for="ballMin">Smallest ball (pixels)</label><input id="ballMin" type="number" min="1" max="200" step="1">
+          <label for="ballMax">Largest ball (pixels)</label><input id="ballMax" type="number" min="20" max="5000" step="10">
+          <label for="showMotion">Show motion on camera</label><input id="showMotion" type="checkbox">
+        </div>
+        <p class="hint">Turn on "Show motion" and throw a ball: red = what the camera sees moving, yellow ring = where it counted the hit. Missed throws: lower the threshold. Hits with no ball: raise it.</p>
         <p class="hint">Touch delay: how long a hand or foot must stay on a tile before it counts. Raise it if tiles flicker or trigger when people just reach toward the wall.</p>
       </details>
     </aside>
@@ -184,13 +194,16 @@ function tileAt(x, y, W, H, s) {
   return Math.floor(v * s.rows) * s.cols + Math.floor(u * s.cols);
 }
 
-function tileColor(k, now) {
+// `still` = no animation (ball mode: the camera would read blinking as motion)
+function tileColor(k, now, still) {
   switch (k) {
     case 'test':   return '#22d3ee';
-    case 'target': return `rgba(34,197,94,${0.55 + 0.45 * Math.sin(now / 110)})`;
+    case 'target': return still ? '#22c55e' : `rgba(34,197,94,${0.55 + 0.45 * Math.sin(now / 110)})`;
     case 'flash':  return '#ecfccb';
-    case 'warn':   return Math.floor(now / 140) % 2 ? '#facc15' : '#3b3006';
+    case 'warn':   return still || Math.floor(now / 140) % 2 ? '#facc15' : '#3b3006';
     case 'lava':   return '#ef4444';
+    case 'p1':     return '#ef4444';
+    case 'p2':     return '#3b82f6';
     default:       return '#0d1117';
   }
 }
@@ -219,7 +232,7 @@ function render(ctx, W, H, s, now) {
       const i = r * s.cols + c, k = s.tiles[i] || '';
       const x = L.gx + c * tw + pad, y = L.gy + r * th + pad, w = tw - 2 * pad, h = th - 2 * pad;
       roundRect(ctx, x, y, w, h, rad);
-      ctx.fillStyle = tileColor(k, now);
+      ctx.fillStyle = tileColor(k, now, s.still);
       ctx.fill();
       ctx.lineWidth = Math.max(2, t * 0.02);
       ctx.strokeStyle = k ? 'rgba(255,255,255,.25)' : '#2b3446';
@@ -382,11 +395,12 @@ function startControl() {
   };
   const cfg = {
     rows: 3, cols: 3, dwell: 150, minVis: 0.5, margin: 0.04, roundSec: 45,
-    showFeet: true, sound: true, model: 'lite', track: 'hands', ...store.get('cfg', {}),
+    showFeet: true, sound: true, model: 'lite', track: 'hands',
+    ballSens: 35, ballMin: 3, ballMax: 800, showMotion: false, ...store.get('cfg', {}),
   };
   const saveCfg = () => store.set('cfg', cfg);
 
-  for (const k of ['rows', 'cols', 'dwell', 'minVis', 'margin', 'roundSec']) {
+  for (const k of ['rows', 'cols', 'dwell', 'minVis', 'margin', 'roundSec', 'ballSens', 'ballMin', 'ballMax']) {
     const el = $(k);
     el.value = cfg[k];
     el.addEventListener('change', () => {
@@ -399,7 +413,7 @@ function startControl() {
       if (k === 'rows' || k === 'cols') stopGame();
     });
   }
-  for (const k of ['showFeet', 'sound']) {
+  for (const k of ['showFeet', 'sound', 'showMotion']) {
     $(k).checked = cfg[k];
     $(k).addEventListener('change', () => { cfg[k] = $(k).checked; saveCfg(); });
   }
@@ -408,6 +422,7 @@ function startControl() {
     hands: 'Wall mode: put the camera behind the players (next to the projector), facing the wall.',
     feet: 'Floor mode: mount the camera high so it sees the whole grid and players\' feet.',
     both: 'Hands and feet both count.',
+    ball: 'Ball mode: put the camera right next to the projector. Players throw from 3+ m back. Soft foam balls work best.',
   };
   const showTrackHint = () => { $('trackHint').textContent = TRACK_HINTS[cfg.track]; };
   $('track').value = cfg.track;
@@ -642,7 +657,8 @@ function startControl() {
   const HINTS = {
     test: 'Tiles light up while someone touches or stands on them. Use this to check tracking.',
     hits: 'Hit the pulsing green tile as fast as you can.',
-    lava: 'Yellow blinking = about to turn to lava. Stay off it before it turns red. 3 lives.',
+    lava: 'Yellow blinking = about to turn to lava. Stay off it before it turns red. 3 lives. (Not for ball mode.)',
+    ttt: 'Red and Blue take turns. Hit an empty tile to claim it. Three in a row wins. Great with balls.',
   };
   const showHint = () => { $('modeHint').textContent = HINTS[$('mode').value]; };
   $('mode').onchange = () => { showHint(); if ($('mode').value === 'test') startGame(); };
@@ -654,6 +670,7 @@ function startControl() {
     G.mode = $('mode').value;
     G.score = 0; G.lives = 3; G.invuln = 0; G.flashUntil = 0; G.msg = '';
     if (G.mode === 'test') { G.phase = 'play'; return; }
+    if (G.mode === 'ttt') { G.phase = 'play'; G.turn = 'p1'; beep(660, 0.12); return; }
     G.phase = 'countdown'; G.goAt = now + 3000; G.lastCount = 4;
     actx?.resume?.();
   }
@@ -684,8 +701,26 @@ function startControl() {
       else if (t.k === 'lava' && now > t.until) t.k = '';
     }
 
+    if (G.mode === 'ttt') {
+      const TEAM = { p1: 'Red', p2: 'Blue' };
+      if (G.phase === 'play') {
+        for (const i of edges) {
+          if (G.tiles[i].k) continue;
+          G.tiles[i].k = G.turn;
+          beep(G.turn === 'p1' ? 520 : 780, 0.12, 'triangle');
+          if (tttWinner(G.turn)) { G.phase = 'over'; G.overMsg = `${TEAM[G.turn]} wins!\npress Start to play again`; beep(880, 0.15); setTimeout(() => beep(1175, 0.3), 160); break; }
+          if (G.tiles.every(t => t.k)) { G.phase = 'over'; G.overMsg = 'Draw!\npress Start to play again'; beep(330, 0.3); break; }
+          G.turn = G.turn === 'p1' ? 'p2' : 'p1';
+        }
+      }
+      if (G.phase === 'over') G.msg = G.overMsg;
+      return { left: 'Tic-tac-toe', right: G.phase === 'play' ? `${TEAM[G.turn]}'s turn` : '' };
+    }
+
     if (G.mode === 'test') {
-      G.tiles.forEach((t, i) => { t.k = pressed[i] ? 'test' : ''; });
+      // A ball hit only "presses" for one frame, so keep hit tiles lit briefly
+      for (const i of edges) G.tiles[i].hold = now + 400;
+      G.tiles.forEach((t, i) => { t.k = pressed[i] || t.hold > now ? 'test' : ''; });
       hud.left = 'Test mode';
       hud.right = `${pressed.filter(Boolean).length} on`;
       return hud;
@@ -744,6 +779,20 @@ function startControl() {
       : '♥'.repeat(Math.max(0, G.lives));
     return hud;
   }
+  // Three in a row (or the full line on grids smaller than 3)
+  function tttWinner(team) {
+    const R = cfg.rows, C = cfg.cols, L = Math.min(3, R, C);
+    const at = (r, c) => r >= 0 && r < R && c >= 0 && c < C && G.tiles[r * C + c].k === team;
+    for (let r = 0; r < R; r++) for (let c = 0; c < C; c++) {
+      for (const [dr, dc] of [[0, 1], [1, 0], [1, 1], [1, -1]]) {
+        let k = 0;
+        while (k < L && at(r + dr * k, c + dc * k)) k++;
+        if (k === L) return true;
+      }
+    }
+    return false;
+  }
+
   function endGame(line) {
     G.phase = 'over';
     G.overMsg = `Game over\n${line} · press Start to play again`;
@@ -790,6 +839,16 @@ function startControl() {
       }
       cctx.stroke();
     }
+    // Ball mode: moving pixels (red) and the last counted hit (yellow ring)
+    if (motionPts && bH) {
+      const sx = W / BW, sy = Hh / bH;
+      cctx.fillStyle = 'rgba(239,68,68,.75)';
+      for (const i of motionPts) cctx.fillRect((i % BW) * sx, ((i / BW) | 0) * sy, sx, sy);
+    }
+    if (lastBallHit && performance.now() - lastBallHit.t < 1200) {
+      cctx.strokeStyle = '#facc15'; cctx.lineWidth = 4 * k;
+      cctx.beginPath(); cctx.arc(lastBallHit.x * W, lastBallHit.y * Hh, 18 * k, 0, Math.PI * 2); cctx.stroke();
+    }
     for (const f of feet) {
       cctx.fillStyle = f.on ? '#22c55e' : '#94a3b8';
       cctx.strokeStyle = '#000'; cctx.lineWidth = 2 * k;
@@ -797,10 +856,105 @@ function startControl() {
     }
   }
 
+  // ---------- Ball hit detector ----------
+  // Compares each camera frame with the one before, inside the grid only.
+  // People (their body boxes from the AI) and moments right after the
+  // projected picture changes are ignored. A "throw" is a burst of small
+  // motion; the hit point is the frame where the moving blob was smallest
+  // (the ball is farthest away and slowest when it reaches the wall).
+  const BW = 160;
+  const ballCv = document.createElement('canvas');
+  const bctx = ballCv.getContext('2d', { willReadFrequently: true });
+  let bH = 0, prevGray = null, gridMap = null, edgeMap = null, mapKey = '';
+  let ev = null, suppressUntil = 0, ballCooldown = 0, motionPts = null, lastBallHit = null;
+  const ballHits = [];
+
+  function buildMaps() {
+    gridMap = new Int16Array(BW * bH).fill(-1);
+    for (let y = 0; y < bH; y++) for (let x = 0; x < BW; x++) {
+      const { u, v } = applyH(H, (x + 0.5) / BW, (y + 0.5) / bH);
+      if (u >= 0 && u < 1 && v >= 0 && v < 1) gridMap[y * BW + x] = Math.floor(v * cfg.rows) * cfg.cols + Math.floor(u * cfg.cols);
+    }
+    edgeMap = new Uint8Array(BW * bH);
+    for (let y = 0; y < bH; y++) for (let x = 0; x < BW; x++) {
+      const i = y * BW + x;
+      if (gridMap[i] < 0) continue;
+      if (x === 0 || y === 0 || x === BW - 1 || y === bH - 1 ||
+          gridMap[i - 1] < 0 || gridMap[i + 1] < 0 || gridMap[i - BW] < 0 || gridMap[i + BW] < 0) edgeMap[i] = 1;
+    }
+  }
+
+  function detectBall(now) {
+    if (!H || !camOn || video.readyState < 2 || !video.videoWidth) { prevGray = null; ev = null; return; }
+    const h = Math.max(1, Math.round(BW * video.videoHeight / video.videoWidth));
+    if (h !== bH) { bH = h; ballCv.width = BW; ballCv.height = bH; prevGray = null; mapKey = ''; }
+    bctx.drawImage(video, 0, 0, BW, bH);
+    const px = bctx.getImageData(0, 0, BW, bH).data;
+    const gray = new Uint8Array(BW * bH);
+    for (let i = 0, j = 0; i < gray.length; i++, j += 4) gray[i] = (px[j] * 77 + px[j + 1] * 150 + px[j + 2] * 29) >> 8;
+    processGray(now, gray);
+  }
+
+  function processGray(now, gray) {
+    const key = `${bH}|${cfg.rows}|${cfg.cols}|${calibPts}`;
+    if (key !== mapKey) { mapKey = key; buildMaps(); }
+    const last = prevGray;
+    prevGray = gray;
+    if (!last) return;
+
+    // Mask out people
+    const mask = new Uint8Array(BW * bH);
+    for (const lm of poses) {
+      let x0 = 1, y0 = 1, x1 = 0, y1 = 0;
+      for (const p of lm) {
+        if ((p.visibility ?? 1) < 0.3) continue;
+        x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y);
+      }
+      if (x1 <= x0) continue;
+      const pw = (x1 - x0) * 0.25 + 0.02, ph = (y1 - y0) * 0.15 + 0.02;
+      const ax = Math.max(0, Math.floor((x0 - pw) * BW)), bx = Math.min(BW - 1, Math.ceil((x1 + pw) * BW));
+      const ay = Math.max(0, Math.floor((y0 - ph) * bH)), by = Math.min(bH - 1, Math.ceil((y1 + ph) * bH));
+      for (let y = ay; y <= by; y++) mask.fill(1, y * BW + ax, y * BW + bx + 1);
+    }
+
+    let count = 0, sx = 0, sy = 0, edge = false;
+    const pts = cfg.showMotion ? [] : null;
+    for (let i = 0; i < gray.length; i++) {
+      if (gridMap[i] < 0 || mask[i]) continue;
+      if (Math.abs(gray[i] - last[i]) > cfg.ballSens) {
+        count++; sx += i % BW; sy += (i / BW) | 0;
+        if (edgeMap[i]) edge = true;
+        pts?.push(i);
+      }
+    }
+    motionPts = pts;
+
+    if (now < suppressUntil || now < ballCooldown) { ev = null; return; }
+    if (count > cfg.ballMax) { ev = null; suppressUntil = now + 150; return; }   // lights / big movement
+    if (count >= cfg.ballMin) {
+      ev ||= { start: now, frames: [] };
+      ev.frames.push({ count, x: sx / count, y: sy / count, edge });
+      ev.last = now;
+    }
+    if (ev && (now - ev.last > 100 || now - ev.start > 700)) {
+      const inner = ev.frames.filter(f => !f.edge);
+      const pool = inner.length ? inner : ev.frames;
+      const best = pool.reduce((a, b) => (b.count < a.count ? b : a));
+      const cx = (best.x + 0.5) / BW, cy = (best.y + 0.5) / bH;
+      const { u, v } = applyH(H, cx, cy);
+      if (u >= 0 && u < 1 && v >= 0 && v < 1) {
+        ballHits.push(Math.floor(v * cfg.rows) * cfg.cols + Math.floor(u * cfg.cols));
+        lastBallHit = { x: cx, y: cy, t: now };
+        ballCooldown = now + 250;
+      }
+      ev = null;
+    }
+  }
+
   // ---------- Main loop ----------
   // The loop runs on this page's animation frames. When this page is hidden
   // (e.g. minimized behind the projector), the projector's frames drive it.
-  let lastVT = -1, poses = [], prev = [], det = 0, detT = performance.now(), fps = 0, lastStep = 0;
+  let lastVT = -1, poses = [], prev = [], det = 0, detT = performance.now(), fps = 0, lastStep = 0, lastSig = '';
   function loop() {
     step();
     requestAnimationFrame(loop);
@@ -810,15 +964,18 @@ function startControl() {
     if (now - lastStep < 8) return;
     lastStep = now;
 
-    if (camOn && landmarker && video.readyState >= 2 && video.currentTime !== lastVT) {
+    const ballMode = cfg.track === 'ball';
+    if (camOn && video.readyState >= 2 && video.currentTime !== lastVT) {
       lastVT = video.currentTime;
-      try { poses = landmarker.detectForVideo(video, now).landmarks || []; det++; } catch {}
+      if (landmarker) { try { poses = landmarker.detectForVideo(video, now).landmarks || []; det++; } catch {} }
+      if (ballMode) detectBall(now);
     }
+    if (!ballMode) { motionPts = null; ev = null; ballHits.length = 0; }
     if (now - detT > 1000) { fps = det * 1000 / (now - detT); det = 0; detT = now; }
 
-    // Feet -> tiles
+    // Hands/feet -> tiles (not in ball mode: there people are only masked out)
     const camFeet = [], gridFeet = [], onTiles = new Set();
-    for (const lm of poses) {
+    for (const lm of ballMode ? [] : poses) {
       for (const f of pointsOf(lm)) {
         let on = false;
         if (H) {
@@ -841,6 +998,8 @@ function startControl() {
     const pressed = Array.from({ length: n() }, () => false);
     for (const [i, p] of presence) if (i < n() && now - p.first >= cfg.dwell) pressed[i] = true;
     for (const i of sim.values()) if (i < n()) pressed[i] = true;
+    for (const i of ballHits) if (i < n()) pressed[i] = true;   // a ball hit is a one-frame press
+    ballHits.length = 0;
     const edges = [];
     pressed.forEach((v, i) => { if (v && !prev[i]) edges.push(i); });
     prev = pressed;
@@ -854,7 +1013,13 @@ function startControl() {
       calibrating, calibNext: newPts.length,
       feet: cfg.showFeet ? gridFeet : [],
       hitFlash: now < G.flashUntil,
+      still: ballMode,
     };
+
+    // When the projected picture changes, the camera sees it as motion.
+    // Ignore ball detection briefly so that doesn't count as a hit.
+    const sig = snap.tiles.join() + '|' + hud.msg + '|' + snap.hitFlash + '|' + calibrating;
+    if (sig !== lastSig) { lastSig = sig; suppressUntil = Math.max(suppressUntil, now + 350); }
 
     const { ctx, W, H: Hp } = fitCanvas(pv);
     render(ctx, W, Hp, snap, now);
@@ -873,6 +1038,12 @@ function startControl() {
     if (!camOn) d = 'Camera is off. Start it in step 2.';
     else if (!landmarker) d = modelLoading ? 'Loading the AI model…' : 'AI model not loaded. Check the internet connection, then press Restart in step 2.';
     else if (!H) d = 'Not calibrated, so tiles can\'t react yet. Press Calibrate in step 3.';
+    else if (ballMode) {
+      ok = true;
+      d = lastBallHit && now - lastBallHit.t < 3000
+        ? 'Ball mode: hit counted (yellow ring on the camera view).'
+        : 'Ball mode ready: throw at the wall. Turn on "Show motion" in Settings to tune it.';
+    }
     else if (!poses.length) d = 'No person seen. The camera must see the player\'s whole body (head to feet).';
     else if (!camFeet.length) d = `Person seen, but their ${what} aren't clear. Add light, or lower Detection confidence in Settings.`;
     else if (!gridFeet.length) d = `${what[0].toUpperCase() + what.slice(1)} are outside the grid. If the blue lines don't match the projection, recalibrate.`;
@@ -885,7 +1056,17 @@ function startControl() {
   requestAnimationFrame(loop);
 
   // Expose a tiny hook for automated checks
-  window.__floorGrid = { applyH, homography, cfg, G, sim, step, pointsOf };
+  window.__floorGrid = {
+    applyH, homography, cfg, G, sim, step, pointsOf, setCalibration,
+    // Feed synthetic grayscale frames (BW x h) to the ball detector; returns hit tiles
+    ballTest(frames, h, dt = 33) {
+      bH = h; prevGray = null; mapKey = ''; ev = null; suppressUntil = 0; ballCooldown = 0;
+      const out = [];
+      let t = performance.now();
+      for (const f of frames) { processGray(t, f); out.push(...ballHits); ballHits.length = 0; t += dt; }
+      return out;
+    },
+  };
 }
 </script>
 </body>

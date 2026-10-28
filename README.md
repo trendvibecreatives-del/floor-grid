@@ -17,3 +17,6 @@ if available, or opens `floor-grid.html` directly.
 - **Test tiles** – a tile lights up while it's touched. Use this to check tracking.
 - **Hit the lights** – hit the pulsing green tile as fast as you can.
 - **Lava floor** – stay off tiles that turn red. 3 lives.
+- **Tic-tac-toe (2 teams)** – Red and Blue take turns claiming tiles. Three in a row wins.
+
+Input can be hands (wall), feet (floor), or **thrown balls** (wall, strike-style).

@@ -18,6 +18,27 @@ Wall tips:
   Mounting the projector high and angled down helps.
 - Make sure people's arms aren't hidden behind their own bodies from the camera's view. A camera a bit to the side can help.
 
+## Ball throwing (strike-style)
+
+Players throw soft balls at the wall instead of touching it.
+
+1. Put the camera **right next to the projector** (as close as possible, same direction).
+   This hides players' shadows from the camera and makes the hit point line up with the tiles.
+2. Set **Track** to **Ball (throwing)** and calibrate as usual.
+3. Players throw from a line 3+ m from the wall. Soft foam or plastic balls work best.
+4. Open **Settings**, tick **Show motion on camera**, and throw a few balls:
+   - Red pixels = what the camera sees moving. A yellow ring = where it counted the hit.
+   - Throws not counted → lower **Motion threshold** (try 20–25) or **Smallest ball**.
+   - Hits counted with no ball → raise **Motion threshold** (try 45–60).
+   - Hits counted on the wrong tile → move the camera closer to the projector and recalibrate.
+5. Games that work with balls: **Test tiles**, **Hit the lights**, **Tic-tac-toe (2 teams)**.
+
+Notes:
+- Tiles don't blink or pulse in ball mode, because the camera would read blinking as motion.
+- Right after the picture changes (a hit, a new target), the app ignores motion for about 0.35 s.
+  Two balls thrown at almost the same moment may count as one.
+- A white or bright ball against the dark tiles is easiest for the camera to see.
+
 ## Floor setup (later)
 
 For the floor, set **Track** to **Feet (floor)**.
