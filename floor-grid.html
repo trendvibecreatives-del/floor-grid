@@ -565,7 +565,17 @@ function startControl() {
       ? '<span class="ok">Calibrated.</span> Recalibrate if the camera or projector moves.'
       : 'Not calibrated. The grid must be visible on the floor and in the camera.';
   }
-  setCalibration(calibPts);
+  setCalibration(Array.isArray(calibPts) && calibPts.length === 4 ? sortCorners(calibPts) : null);
+
+  // Put 4 clicked corners in order TL, TR, BR, BL whatever order they were clicked in:
+  // sort them clockwise around their center, starting from the top-left one.
+  function sortCorners(pts) {
+    const cx = pts.reduce((s, p) => s + p[0], 0) / 4, cy = pts.reduce((s, p) => s + p[1], 0) / 4;
+    const cw = [...pts].sort((a, b) => Math.atan2(a[1] - cy, a[0] - cx) - Math.atan2(b[1] - cy, b[0] - cx));
+    let tl = 0;
+    cw.forEach((p, i) => { if (p[0] + p[1] < cw[tl][0] + cw[tl][1]) tl = i; });
+    return [0, 1, 2, 3].map(k => cw[(tl + k) % 4]);
+  }
 
   let calibrating = false, newPts = [];
   const CORNER_NAMES = ['top-left', 'top-right', 'bottom-right', 'bottom-left'];
@@ -593,8 +603,9 @@ function startControl() {
     play('calib');
     if (newPts.length === 4) {
       calibrating = false;
-      const h = homography(newPts, UNIT);
-      if (h) { setCalibration(newPts); setStatus('Calibration saved.', 'ok'); }
+      const pts = sortCorners(newPts);
+      const h = homography(pts, UNIT);
+      if (h) { setCalibration(pts); setStatus('Calibration saved.', 'ok'); }
       else setStatus('Those 4 points did not make a valid shape. Try again.', 'bad');
     }
     updateCalibHelp();
@@ -1237,7 +1248,7 @@ function startControl() {
   // Expose a tiny hook for automated checks
   window.__floorGrid = {
     applyH, homography, cfg, G, sim, step, pointsOf, setCalibration, health,
-    setPoses(p) { poses = p; },
+    setPoses(p) { poses = p; }, sortCorners,
     get lastEvFrames() { return lastEvFrames; },
     async useStream(s) { video.srcObject = s; await video.play(); camOn = true; $('camEmpty').hidden = true; },
     // Feed synthetic grayscale frames (BW x h) to the ball detector; returns hit tiles
