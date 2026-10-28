@@ -950,7 +950,7 @@ function startControl() {
   const bctx = ballCv.getContext('2d', { willReadFrequently: true });
   let bH = 0, prevGray = null, gridMap = null, edgeMap = null, mapKey = '';
   let ev = null, suppressUntil = 0, ballCooldown = 0, motionPts = null, lastBallHit = null;
-  let noiseEma = 0, thrNow = 0, motionNow = 0, ballInfo = null, lastEvFrames = null;
+  let noiseEma = 0, thrNow = 0, motionNow = 0, ballInfo = null, lastEvFrames = null, peakMotion = { v: 0, t: 0 };
   const ballHits = [];
 
   const mcv = document.createElement('canvas');
@@ -1007,17 +1007,25 @@ function startControl() {
     if (h !== bH) { bH = h; ballCv.width = BW; ballCv.height = bH; prevGray = null; mapKey = ''; }
     bctx.drawImage(video, 0, 0, BW, bH);
     const px = bctx.getImageData(0, 0, BW, bH).data;
-    const gray = new Uint8Array(BW * bH);
-    for (let i = 0, j = 0; i < gray.length; i++, j += 4) gray[i] = (px[j] * 77 + px[j + 1] * 150 + px[j + 2] * 29) >> 8;
-    processGray(now, gray);
+    // Keep color (R,G,B): a ball can be as bright as the lit wall but a different color
+    const rgb = new Uint8Array(BW * bH * 3);
+    for (let i = 0, j = 0; j < px.length; j += 4) { rgb[i++] = px[j]; rgb[i++] = px[j + 1]; rgb[i++] = px[j + 2]; }
+    processGray(now, rgb);
   }
 
-  function processGray(now, gray) {
+  // `frame` is 1 value per pixel (gray) or 3 (RGB). The change at a pixel is
+  // the biggest change in any color channel.
+  function processGray(now, frame) {
     const key = `${bH}|${cfg.rows}|${cfg.cols}|${calibPts}`;
     if (key !== mapKey) { mapKey = key; buildMaps(); }
     const last = prevGray;
-    prevGray = gray;
-    if (!last) return;
+    prevGray = frame;
+    if (!last || last.length !== frame.length) return;
+    const N = BW * bH, C = frame.length / N;
+    const change = C === 1
+      ? i => Math.abs(frame[i] - last[i])
+      : i => { const j = i * 3; return Math.max(Math.abs(frame[j] - last[j]), Math.abs(frame[j + 1] - last[j + 1]), Math.abs(frame[j + 2] - last[j + 2])); };
+    const gray = { length: N };
 
     // Mask out people: thick lines along their body (not a big box, which
     // could cover most of the wall when the camera is behind the players)
@@ -1025,7 +1033,7 @@ function startControl() {
 
     // Camera noise level (dark cameras are grainy). Auto threshold follows it.
     let noiseSum = 0, noiseN = 0;
-    for (let i = 0; i < gray.length; i += 7) if (gridMap[i] >= 0) { noiseSum += Math.abs(gray[i] - last[i]); noiseN++; }
+    for (let i = 0; i < gray.length; i += 7) if (gridMap[i] >= 0) { noiseSum += change(i); noiseN++; }
     const noise = noiseN ? noiseSum / noiseN : 0;
     noiseEma = noiseEma ? noiseEma * 0.95 + noise * 0.05 : noise;
     thrNow = cfg.ballAuto ? Math.max(8, Math.min(60, Math.round(noiseEma * 5 + 6))) : cfg.ballSens;
@@ -1034,7 +1042,7 @@ function startControl() {
     const pts = cfg.showMotion ? [] : null;
     for (let i = 0; i < gray.length; i++) {
       if (gridMap[i] < 0 || mask[i]) continue;
-      if (Math.abs(gray[i] - last[i]) > thrNow) {
+      if (change(i) > thrNow) {
         count++; sx += i % BW; sy += (i / BW) | 0;
         // Blob cut off by the grid edge or a person = only part of the ball is visible
         if (edgeMap[i]) edge = true;
@@ -1044,6 +1052,7 @@ function startControl() {
     }
     motionPts = pts;
     motionNow = count;
+    if (count >= peakMotion.v || now - peakMotion.t > 3000) peakMotion = { v: count, t: now };
 
     if (now < suppressUntil || now < ballCooldown) {
       if (count >= cfg.ballMin && now >= ballCooldown) ballInfo = { t: now, text: 'Motion ignored: the projected picture just changed.' };
@@ -1211,7 +1220,7 @@ function startControl() {
     else if (ballMode) {
       const recent = ballInfo && now - ballInfo.t < 4000;
       ok = !recent || ballInfo.text.startsWith('Hit');
-      d = `Ball mode · threshold ${thrNow || '–'} · motion now ${motionNow} px · ` +
+      d = `Ball mode · threshold ${thrNow || '–'} · biggest motion (3 s) ${peakMotion.v} px · ` +
           (recent ? ballInfo.text : 'Ready: throw at the wall. Tick "Show motion" in Settings to see what the camera sees.');
     }
     else if (!poses.length) d = 'No person seen. The camera must see the player\'s whole body (head to feet).';
