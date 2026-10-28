@@ -221,7 +221,7 @@
 const IS_PROJ = new URLSearchParams(location.search).get('view') === 'projector';
 // Bump on every release. The projector reloads itself when the control page
 // runs a different version, so the two windows never get out of step.
-const APP_VERSION = '2026-10-29.1';
+const APP_VERSION = '2026-10-29.2';
 
 // Where the grid sits inside a W x H screen. A HUD band sits on top.
 function layout(W, H, s) {
@@ -1483,13 +1483,58 @@ function startControl() {
   $('mode').onchange = () => { showHint(); if ($('mode').value === 'test') startGame(); };
   showHint();
 
+  // ---------- Activity meter ----------
+  // Uses the body tracking: whenever someone's hands, feet or hips move faster
+  // than a gentle sway, that time counts as "active". Throws are counted too.
+  const ACT = { activeMs: 0, throws: 0, lastT: 0, prevPoses: null, prevPoseT: 0, moving: false, movingAt: 0 };
+  function resetActivity(now) {
+    Object.assign(ACT, { activeMs: 0, throws: 0, lastT: now, prevPoses: null, prevPoseT: 0, moving: false, movingAt: 0 });
+  }
+  function updateActivity(now, posesNow, shotsNow) {
+    const dt = Math.min(200, Math.max(0, now - (ACT.lastT || now)));
+    ACT.lastT = now;
+    const playing = G.mode !== 'test' && (G.phase === 'play' || G.phase === 'countdown' || G.challenge);
+    if (!playing) return;
+    ACT.throws += shotsNow.filter(s => s.src === 'ball' || s.src === 'touch').length;
+    if (posesNow !== ACT.prevPoses) {                 // a new camera picture was analysed
+      const pdt = Math.max(0.03, (now - ACT.prevPoseT) / 1000);
+      let moving = false;
+      (posesNow || []).forEach((lm, k) => {
+        const pv = ACT.prevPoses && ACT.prevPoses[k];
+        if (!pv || !lm[11] || !lm[23]) return;
+        const torso = Math.hypot(lm[11].x - lm[23].x, lm[11].y - lm[23].y) || 0.1;
+        let sum = 0, cnt = 0;
+        for (const i of [15, 16, 27, 28, 23, 24]) if (lm[i] && pv[i]) { sum += Math.hypot(lm[i].x - pv[i].x, lm[i].y - pv[i].y); cnt++; }
+        if (cnt && (sum / cnt) / torso / pdt > 0.35) moving = true;   // torso-lengths per second
+      });
+      ACT.prevPoses = posesNow; ACT.prevPoseT = now;
+      if (moving) { ACT.moving = true; ACT.movingAt = now; }
+    }
+    if (ACT.moving && now - ACT.movingAt > 500) ACT.moving = false;
+    if (ACT.moving) ACT.activeMs += dt;
+  }
+  const fmtActive = ms => { const s = Math.round(ms / 1000); return s >= 60 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${s} s`; };
+  const activityLine = () => `Active ${fmtActive(ACT.activeMs)} · ${ACT.throws} throws/touches`;
+
+  // Start button: one game, or the Family Challenge circuit
   function startGame() {
     const now = performance.now();
-    G.mode = $('mode').value;
+    G.challenge = null;
+    resetActivity(now);
+    if ($('mode').value === 'challenge') { startChallenge(now); return; }
+    startMode($('mode').value, curLevel(), now);
+  }
+
+  // Start one game. `limits` (used by the Family Challenge) can shorten it:
+  // { roundSec, questions, timeLimitSec }
+  function startMode(mode, lv, now, limits = null) {
+    G.mode = mode;
+    G.limits = limits;
     G.gridOverride = null;
     G.lockUntil = 0;
+    G.overAt = 0;
     if (G.mode === 'ttt') {
-      const L = curLevel() || TTT_LEVELS[0];
+      const L = lv || TTT_LEVELS[0];
       G.ttt = L;
       G.gridOverride = { rows: L.rows, cols: L.cols };
     }
@@ -1497,9 +1542,9 @@ function startControl() {
     G.score = 0; G.lives = 3; G.invuln = 0; G.flashUntil = 0; G.msg = '';
     if (cfg.sound) try { audio(); } catch {}
     if (G.mode === 'test') { G.phase = 'play'; return; }
-    if (G.mode === 'math' || G.mode === 'pattern') { startQuiz(now, G.mode, curLevel()); return; }
-    if (G.mode === 'memory') { startMemory(now, curLevel()); return; }
-    if (G.mode === 'echo') { startEcho(now, curLevel()); return; }
+    if (G.mode === 'math' || G.mode === 'pattern') { startQuiz(now, G.mode, lv); return; }
+    if (G.mode === 'memory') { startMemory(now, lv); return; }
+    if (G.mode === 'echo') { startEcho(now, lv); return; }
     if (G.mode === 'ttt') {
       G.phase = 'play'; G.turn = 'p1'; G.winCells = null; G.history = []; G.lockUntil = 0;
       G.turnEnds = G.ttt.turnSec ? now + G.ttt.turnSec * 1000 : 0;
@@ -1514,6 +1559,7 @@ function startControl() {
     if (cfg.sound) try { audio(); } catch {}
   }
   function stopGame() {
+    G.challenge = null; G.limits = null;
     G.gridOverride = null;
     clearTiles();
     G.mode = 'test'; G.phase = 'play'; G.msg = '';
@@ -1640,6 +1686,13 @@ function startControl() {
         else play('boom', bestPose.r > 0.12 ? 'big' : 'small', M.combo);
       }
 
+      // Family Challenge: this stage has a time limit
+      if (G.limits && G.limits.roundSec && now - G.start >= G.limits.roundSec * 1000 && M.shield > 0) {
+        G.phase = 'over';
+        G.overMsg = `Time's up!\nScore ${G.score} · Wave ${M.wave}`;
+        M.asteroids = [];
+        play('win');
+      }
       if (M.shield <= 0) {
         G.phase = 'over';
         const bestScore = Math.max(G.score, store.get('meteorBest', 0));
@@ -1740,7 +1793,7 @@ function startControl() {
 
   function startQuiz(now, kind, lv) {
     G.phase = 'play';
-    G.quiz = { kind, lv, q: 0, total: 10, stars: 0, fx: [], cur: null, nextAt: 0, firstTry: true };
+    G.quiz = { kind, lv, q: 0, total: (G.limits && G.limits.questions) || 10, stars: 0, fx: [], cur: null, nextAt: 0, firstTry: true };
     nextQuestion(now);
   }
   function nextQuestion(now) {
@@ -1822,6 +1875,12 @@ function startControl() {
     if (M.backAt && now >= M.backAt) {               // not a pair: turn both back over
       M.cards[M.first].up = false; M.cards[M.second].up = false;
       M.first = M.second = -1; M.backAt = 0;
+    }
+    // Family Challenge: this stage has a time limit
+    if (G.phase === 'play' && G.limits && G.limits.timeLimitSec && now - M.start >= G.limits.timeLimitSec * 1000) {
+      G.phase = 'over';
+      G.overMsg = `Time's up!\n${M.found} of ${M.pairs} pairs found`;
+      play('lose');
     }
     if (G.phase === 'play' && !M.backAt) {
       for (const s of shots) {
@@ -2002,7 +2061,7 @@ function startControl() {
       const left = Math.ceil((G.goAt - now) / 1000);
       if (left !== G.lastCount) { G.lastCount = left; if (left > 0) play('tick'); }
       if (now >= G.goAt) {
-        G.phase = 'play'; G.start = now; G.end = now + cfg.roundSec * 1000; G.nextSpawn = now + 400;
+        G.phase = 'play'; G.start = now; G.end = now + ((G.limits && G.limits.roundSec) || cfg.roundSec) * 1000; G.nextSpawn = now + 400;
         play('go');
       } else G.msg = String(left);
     }
@@ -2054,7 +2113,7 @@ function startControl() {
     const name = G.mode === 'hits' ? 'Hit the lights' : 'Lava floor';
     hud.left = `${name} · ${G.mode === 'lava' ? G.score + 's' : 'Score ' + G.score}`;
     hud.right = G.mode === 'hits'
-      ? (G.phase === 'play' ? fmtTime(G.end - now) : fmtTime(cfg.roundSec * 1000))
+      ? (G.phase === 'play' ? fmtTime(G.end - now) : fmtTime(((G.limits && G.limits.roundSec) || cfg.roundSec) * 1000))
       : '♥'.repeat(Math.max(0, G.lives));
     return hud;
   }
@@ -2556,9 +2615,12 @@ function startControl() {
       }
     }
 
-    const hud = tickGame(now, pressed, edges, shots);
+    updateActivity(now, poses, shots);
+    const hud = G.challenge ? tickChallenge(now, pressed, edges, shots) : tickGame(now, pressed, edges, shots);
     shots.length = 0;
     hud.msg = G.msg;
+    // Single games: show how active the players were on the final screen
+    if (!G.challenge && G.phase === 'over' && hud.msg && (ACT.activeMs > 0 || ACT.throws > 0)) hud.msg += `\n${activityLine()}`;
 
     const snap = {
       rows: GR().rows, cols: GR().cols, margin: cfg.margin,
@@ -2587,7 +2649,7 @@ function startControl() {
     const projOk = now - lastTick < 1500;
     $('stats').textContent = (camOn
       ? `Camera ${now - health.lastFrameAt < 2000 ? 'live' : 'frozen'}${health.bright !== null ? ` · brightness ${health.bright}%` : ''} · AI ${fps.toFixed(0)} fps · ${poses.length} ${poses.length === 1 ? 'person' : 'people'} · ${gridFeet.length} ${what} on grid · `
-      : '') + `Projector: ${projOk ? 'connected' : 'not connected'}`;
+      : '') + `Projector: ${projOk ? 'connected' : 'not connected'}` + (G.mode !== 'test' ? ` · ${activityLine()}` : '');
 
     // Plain-language diagnosis of what's missing
     let d, ok = false;
