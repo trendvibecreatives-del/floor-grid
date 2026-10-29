@@ -221,7 +221,7 @@
 const IS_PROJ = new URLSearchParams(location.search).get('view') === 'projector';
 // Bump on every release. The projector reloads itself when the control page
 // runs a different version, so the two windows never get out of step.
-const APP_VERSION = '2026-10-29.2';
+const APP_VERSION = '2026-10-29.3';
 
 // Where the grid sits inside a W x H screen. A HUD band sits on top.
 function layout(W, H, s) {
@@ -1864,6 +1864,8 @@ function startControl() {
   function startMemory(now, lv) {
     const pairs = (lv.rows * lv.cols) / 2;
     const faces = shuffle([...EMOJI]).slice(0, pairs);
+    // The board everywhere (camera grid lines, touch tiles) = the card layout
+    G.gridOverride = { rows: lv.rows, cols: lv.cols };
     G.mem = { lv, rows: lv.rows, cols: lv.cols, pairs, found: 0, moves: 0, start: now, first: -1, second: -1, backAt: 0, fx: [],
               cards: shuffle([...faces, ...faces]).map(face => ({ face, up: false, matched: false })) };
     G.phase = 'play'; G.lockUntil = now + 400;
@@ -1924,6 +1926,7 @@ function startControl() {
   const PAD_COLORS = ['#ef4444', '#3b82f6', '#22c55e', '#eab308', '#a855f7', '#f97316', '#06b6d4', '#ec4899', '#84cc16'];
   function startEcho(now, lv) {
     const n = lv.rows * lv.cols, key = 'best.echo.' + ECHO_LEVELS.indexOf(lv);
+    G.gridOverride = { rows: lv.rows, cols: lv.cols };   // board = the pad layout
     G.echo = { lv, n, key, seq: [rint(0, n - 1)], state: 'show', showIdx: 0, nextAt: now + 1400, inputIdx: 0, lit: -1, litUntil: 0, best: store.get(key, 0) };
     G.phase = 'play'; play('go'); say('Watch carefully!');
   }
